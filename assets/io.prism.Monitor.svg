@@ -1,0 +1,13 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="256" height="256" viewBox="0 0 256 256" role="img" aria-label="Prism Monitor">
+  <defs>
+    <linearGradient id="prism-body" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0" stop-color="#4cc9f0"/>
+      <stop offset="1" stop-color="#7b61ff"/>
+    </linearGradient>
+  </defs>
+  <circle cx="128" cy="128" r="118" fill="url(#prism-body)"/>
+  <g fill="none" stroke="#070a0f" stroke-width="14" stroke-linejoin="round" stroke-linecap="round" opacity="0.94">
+    <path d="M128 61.92 L196.44 184.64 L59.56 184.64 Z"/>
+    <path d="M128 61.92 L151.6 184.64"/>
+  </g>
+</svg>

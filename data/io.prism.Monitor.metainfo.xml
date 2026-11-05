@@ -1,0 +1,67 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<component type="desktop-application">
+  <id>io.prism.Monitor</id>
+  <metadata_license>CC0-1.0</metadata_license>
+  <project_license>MIT</project_license>
+  <name>Prism Monitor</name>
+  <summary>Fast native system monitor for Linux</summary>
+  <description>
+    <p>
+      Prism Monitor is a lightweight, native system monitor built with GTK 4,
+      Cairo and Pango. It renders live telemetry with custom visualizations while
+      keeping its own CPU footprint low.
+    </p>
+    <p>Monitoring pages include:</p>
+    <ul>
+      <li>Overview, CPU, memory, GPU, storage, network, processes, sensors and power</li>
+      <li>Services, startup entries, network connections and installed applications</li>
+      <li>Drives, disk space analysis, benchmarks, power and session recording</li>
+    </ul>
+    <p>Deep settings cover themes, accents, fonts, language, temperature units,
+      graph history, smoothing, visual quality, animation and popout behavior.</p>
+  </description>
+  <launchable type="desktop-id">prism-monitor.desktop</launchable>
+  <developer id="io.prism">
+    <name>Priderock-Elohimmanuel</name>
+  </developer>
+  <content_rating type="oars-1.1"/>
+  <releases>
+    <release version="1.2.0" date="2026-11-05">
+      <description>
+        <p>Command line with headless JSON snapshot and TSV recording, pause/resume
+          sampling, threshold alerts, Ctrl+K command palette, snapshot/recording
+          export to JSON/CSV, and restored window size and last page.</p>
+      </description>
+    </release>
+    <release version="1.1.0" date="2026-10-30">
+      <description>
+        <p>Appearance now opens a dedicated theme and accent panel, the sidebar
+          can be collapsed to an icon rail, and packaging metadata is current.</p>
+      </description>
+    </release>
+    <release version="1.0.0" date="2026-10-30">
+      <description>
+        <p>First stable release with 18 monitoring and management pages.</p>
+      </description>
+    </release>
+  </releases>
+  <provides>
+    <binary>prism-monitor</binary>
+  </provides>
+  <categories>
+    <category>System</category>
+    <category>Monitor</category>
+  </categories>
+  <keywords>
+    <keyword>system</keyword>
+    <keyword>monitor</keyword>
+    <keyword>cpu</keyword>
+    <keyword>memory</keyword>
+    <keyword>gpu</keyword>
+    <keyword>storage</keyword>
+    <keyword>network</keyword>
+    <keyword>processes</keyword>
+    <keyword>sensors</keyword>
+    <keyword>power</keyword>
+  </keywords>
+</component>

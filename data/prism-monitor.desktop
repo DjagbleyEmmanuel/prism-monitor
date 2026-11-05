@@ -1,0 +1,13 @@
+[Desktop Entry]
+Type=Application
+Version=1.0
+Name=Prism Monitor
+GenericName=System Monitor
+Comment=Fast native system monitor for Linux
+Exec=prism-monitor
+Icon=io.prism.Monitor
+Terminal=false
+Categories=System;Monitor;
+Keywords=system;monitor;cpu;memory;gpu;storage;network;process;processes;sensor;sensors;battery;performance;
+StartupNotify=true
+StartupWMClass=prism-monitor
