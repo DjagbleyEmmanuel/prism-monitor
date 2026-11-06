@@ -140,9 +140,7 @@ static void dbusmenu_method_call(GDBusConnection *connection,
         g_dbus_method_invocation_return_value(invocation,
                                               g_variant_builder_end(&outer));
     } else if (strcmp(method_name, "GetGroupProperties") == 0) {
-        GVariant *ids = NULL;
-        GVariant *prop_names = NULL;
-        g_variant_get(parameters, "(@iaas)", &ids, &prop_names);
+        GVariant *ids = g_variant_get_child_value(parameters, 0);
         GVariantBuilder b;
         g_variant_builder_init(&b, G_VARIANT_TYPE("a(ia{sv})"));
         GVariantIter iter;
@@ -150,8 +148,13 @@ static void dbusmenu_method_call(GDBusConnection *connection,
         gint id;
         while (g_variant_iter_next(&iter, "i", &id)) {
             GVariant *props = menu_props_for(id);
-            g_variant_builder_add(&b, "(i@a{sv})", id, props);
+            GVariantBuilder item;
+            g_variant_builder_init(&item, G_VARIANT_TYPE("(ia{sv})"));
+            g_variant_builder_add(&item, "i", id);
+            g_variant_builder_add_value(&item, props);
+            g_variant_builder_add_value(&b, g_variant_builder_end(&item));
         }
+        g_variant_unref(ids);
         {
             GVariantBuilder outer;
             g_variant_builder_init(&outer, G_VARIANT_TYPE("(a(ia{sv}))"));
@@ -318,12 +321,14 @@ static GVariant *sni_get_property(GDBusConnection *connection,
         return g_variant_new_boolean(FALSE);
     }
     if (strcmp(property_name, "ToolTip") == 0) {
-        /* (sa(ss)): title, icon, subtitle */
-        GVariant *icon = g_variant_new("(ss)", "io.prism.Monitor", "");
+        /* (sa(ss)): title, icon array, subtitle */
+        GVariantBuilder icons;
+        g_variant_builder_init(&icons, G_VARIANT_TYPE("a(ss)"));
+        g_variant_builder_add(&icons, "(ss)", "io.prism.Monitor", "");
         GVariantBuilder tb;
         g_variant_builder_init(&tb, G_VARIANT_TYPE("(sa(ss))"));
         g_variant_builder_add(&tb, "s", "Prism Monitor");
-        g_variant_builder_add_value(&tb, icon);
+        g_variant_builder_add_value(&tb, g_variant_builder_end(&icons));
         return g_variant_builder_end(&tb);
     }
     return NULL;
@@ -407,6 +412,23 @@ static void on_bus_acquired(GDBusConnection *connection, const gchar *name,
     }
     g_dbus_node_info_unref(menu_info);
     g_active = TRUE;
+    /* Register with StatusNotifierWatcher (required by Cinnamon/MATE/GNOME
+     * xsystray hosts — owning the bus name alone is not enough). */
+    {
+        char service[128];
+        snprintf(service, sizeof(service),
+                 "org.kde.StatusNotifierItem-%d-1", (int)getpid());
+        GError *call_err = NULL;
+        GVariant *result = g_dbus_connection_call_sync(
+            connection, "org.kde.StatusNotifierWatcher",
+            "/StatusNotifierWatcher", "org.kde.StatusNotifierWatcher",
+            "RegisterStatusNotifierItem", g_variant_new("(s)", service),
+            NULL, G_DBUS_CALL_FLAGS_NONE, 2000, NULL, &call_err);
+        if (result != NULL) {
+            g_variant_unref(result);
+        }
+        g_clear_error(&call_err);
+    }
 }
 
 static void on_name_acquired(GDBusConnection *connection, const gchar *name,

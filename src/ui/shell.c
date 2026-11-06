@@ -990,7 +990,7 @@ void app_tray_minimize(App *app) {
     if (app == NULL || app->window == NULL) {
         return;
     }
-    if (app->config.tray_enabled) {
+    if (app->config.tray_enabled && tray_is_active()) {
         gtk_widget_set_visible(app->window, FALSE);
     } else {
         gtk_window_minimize(app->window);
@@ -1503,10 +1503,18 @@ static gboolean window_close(GtkWindow *window, gpointer data) {
     }
     app->config.current_page = (int)app->current_page;
     app_save_config(app);
-    if (app->config.tray_enabled) {
+    if (app->config.tray_enabled && tray_is_active()) {
         gtk_widget_set_visible(app->window, FALSE);
         app_notify(app, "Minimized to tray — right-click the tray icon for menu");
         return TRUE; /* prevent destroy */
+    }
+    if (app->config.tray_enabled && !tray_is_active()) {
+        /* Tray host not available (e.g. Cinnamon without xsystray):
+         * fall back to taskbar minimize so the app never disappears. */
+        gtk_window_minimize(app->window);
+        app_notify(app, "Tray host unavailable — minimized to taskbar. "
+                        "Enable xsystray or use --no-tray");
+        return TRUE;
     }
     return FALSE;
 }
@@ -1799,7 +1807,7 @@ App *app_create(GtkApplication *application) {
         app_notify(app, "Tray icon active — right-click it for menu");
     }
     if (app->config.start_minimized || startup_minimized) {
-        if (app->config.tray_enabled) {
+        if (app->config.tray_enabled && tray_is_active()) {
             gtk_widget_set_visible(app->window, FALSE);
         } else {
             gtk_window_minimize(app->window);

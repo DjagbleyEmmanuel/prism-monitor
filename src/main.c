@@ -37,6 +37,8 @@ static void print_usage(const char *prog) {
     printf("  --exporter PORT        Serve Prometheus metrics on localhost:PORT (--duration secs, 0=forever)\n");
     printf("  --tray                 Start in tray mode (close minimizes)\n");
     printf("  --minimized            Start minimized\n");
+    printf("  --no-tray              Disable tray mode and restore window\n");
+    printf("  --quit                 Quit the running instance (recovery)\n");
     printf("  --diagnostics          Write diagnostics bundle and exit\n");
     printf("\n");
     printf("Shortcuts in the GUI: Ctrl+K palette, Ctrl+P pause/resume,\n");
@@ -272,14 +274,37 @@ static int run_diagnostics(double interval) {
     return 1;
 }
 
+static gboolean startup_quit = FALSE;
+static gboolean startup_no_tray = FALSE;
+
 static void prism_activate(GtkApplication *application, gpointer data) {
     (void)data;
-    if (g_object_get_data(G_OBJECT(application), "prism-app") != NULL) {
+    App *existing = g_object_get_data(G_OBJECT(application), "prism-app");
+    if (existing != NULL) {
+        /* Second launch while first is hidden in tray: restore it.
+         * This is the recovery path when the tray icon is not visible. */
+        if (startup_quit) {
+            g_application_quit(G_APPLICATION(application));
+            return;
+        }
+        if (startup_no_tray) {
+            existing->config.tray_enabled = 0;
+            app_save_config(existing);
+        }
+        gtk_widget_set_visible(GTK_WIDGET(existing->window), TRUE);
+        gtk_window_present(existing->window);
         return;
     }
     App *app = app_create(application);
     g_object_set_data_full(G_OBJECT(application), "prism-app", app,
                            (GDestroyNotify)app_destroy);
+    if (startup_no_tray) {
+        app->config.tray_enabled = 0;
+        app_save_config(app);
+    }
+    if (startup_quit) {
+        g_application_quit(G_APPLICATION(application));
+    }
 }
 
 static void prism_shutdown(GtkApplication *application, gpointer data) {
@@ -359,6 +384,10 @@ int main(int argc, char **argv) {
         } else if (strcmp(arg, "--minimized") == 0 ||
                    strcmp(arg, "--start-minimized") == 0) {
             opt_minimized = TRUE;
+        } else if (strcmp(arg, "--no-tray") == 0) {
+            startup_no_tray = TRUE;
+        } else if (strcmp(arg, "--quit") == 0 || strcmp(arg, "--exit") == 0) {
+            startup_quit = TRUE;
         } else if (strncmp(arg, "--exporter=", 11) == 0) {
             opt_exporter = atoi(arg + 11);
         } else if (strcmp(arg, "--exporter") == 0 && i + 1 < argc) {
@@ -410,6 +439,42 @@ int main(int argc, char **argv) {
         g_free(opt_record);
         g_free(gui_argv);
         return status;
+    }
+
+    if (startup_quit) {
+        /* Ask the running primary instance to quit via its GtkApplication
+         * D-Bus} name. If no instance is running, just exit. */
+        GError *err = NULL;
+        GDBusConnection *bus = g_bus_get_sync(G_BUS_TYPE_SESSION, NULL, &err);
+        if (bus != NULL) {
+            GVariantBuilder empty_av, empty_dict, params_b;
+            g_variant_builder_init(&empty_av, G_VARIANT_TYPE("av"));
+            g_variant_builder_init(&empty_dict, G_VARIANT_TYPE("a{sv}"));
+            g_variant_builder_init(&params_b, G_VARIANT_TYPE("(sava{sv})"));
+            g_variant_builder_add(&params_b, "s", "quit");
+            g_variant_builder_add_value(&params_b, g_variant_builder_end(&empty_av));
+            g_variant_builder_add_value(&params_b, g_variant_builder_end(&empty_dict));
+            GVariant *params = g_variant_builder_end(&params_b);
+            GVariant *res = g_dbus_connection_call_sync(
+                bus, "io.prism.Monitor", "/io/prism/Monitor",
+                "org.gtk.Actions", "Activate", params, NULL,
+                G_DBUS_CALL_FLAGS_NONE, 2000, NULL, &err);
+            g_variant_unref(params);
+            if (res != NULL) {
+                g_variant_unref(res);
+                g_object_unref(bus);
+                g_free(opt_page);
+                g_free(opt_snapshot);
+                g_free(opt_record);
+                g_free(gui_argv);
+                return 0;
+            }
+            g_clear_error(&err);
+            g_object_unref(bus);
+        } else {
+            g_clear_error(&err);
+        }
+        /* Launch normally; prism_activate will quit immediately */
     }
 
     app_configure_startup_full(opt_page, opt_interval, opt_paused,

@@ -4,7 +4,7 @@ Fast, native system monitor for Linux — live CPU, memory, GPU, storage,
 network, process, sensor and power telemetry with custom Cairo charts on
 GTK 4.
 
-![Version](https://img.shields.io/badge/version-1.3.0-blue)
+![Version](https://img.shields.io/badge/version-1.3.1-blue)
 ![GTK](https://img.shields.io/badge/GTK-4-green)
 ![License](https://img.shields.io/badge/license-MIT-lightgrey)
 
