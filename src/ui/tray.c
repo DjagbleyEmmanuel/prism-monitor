@@ -23,6 +23,18 @@ static const char *menu_labels[] = {
 static const int menu_count = 7;
 
 static void tray_activate_action(int id) {
+    {
+        char *dir = g_build_filename(g_get_user_data_dir(), "prism-monitor", NULL);
+        g_mkdir_with_parents(dir, 0700);
+        char *logp = g_build_filename(dir, "tray.log", NULL);
+        FILE *f = fopen(logp, "a");
+        if (f != NULL) {
+            fprintf(f, "tray action id=%d\n", id);
+            fclose(f);
+        }
+        g_free(logp);
+        g_free(dir);
+    }
     if (g_app == NULL) {
         return;
     }
@@ -191,6 +203,20 @@ static void dbusmenu_method_call(GDBusConnection *connection,
         g_dbus_method_invocation_return_value(invocation,
                                               g_variant_builder_end(&outer));
     } else if (strcmp(method_name, "EventGroup") == 0) {
+        /* Events: a(isvu) — dispatch each clicked event like Event */
+        GVariant *events = g_variant_get_child_value(parameters, 0);
+        GVariantIter iter;
+        g_variant_iter_init(&iter, events);
+        gint id;
+        const gchar *event_id;
+        GVariant *data;
+        guint ts;
+        while (g_variant_iter_next(&iter, "(isvu)", &id, &event_id, &data, &ts)) {
+            if (strcmp(event_id, "clicked") == 0) {
+                tray_activate_action(id);
+            }
+        }
+        g_variant_unref(events);
         GVariantBuilder eb;
         g_variant_builder_init(&eb, G_VARIANT_TYPE("ai"));
         GVariantBuilder outer;
@@ -408,6 +434,24 @@ static void on_bus_acquired(GDBusConnection *connection, const gchar *name,
         connection, "/StatusNotifierItem/Menu", menu_info->interfaces[0],
         &menu_vtable, NULL, NULL, &err);
     if (g_menu_reg == 0) {
+        g_clear_error(&err);
+    }
+    /* Also register as org.freedesktop.DBus.Menu (alias used by some hosts) */
+    GDBusNodeInfo *alias_info = g_dbus_node_info_new_for_xml(menu_xml, &err);
+    if (alias_info != NULL) {
+        /* Rename interface in-place for second registration */
+        alias_info->interfaces[0]->name = g_strdup("org.freedesktop.DBus.Menu");
+        GDBusInterfaceVTable alias_vtable = {0};
+        alias_vtable.method_call = dbusmenu_method_call;
+        alias_vtable.get_property = dbusmenu_get_property;
+        guint alias_reg = g_dbus_connection_register_object(
+            connection, "/StatusNotifierItem/Menu", alias_info->interfaces[0],
+            &alias_vtable, NULL, NULL, &err);
+        if (alias_reg == 0) {
+            g_clear_error(&err);
+        }
+        g_dbus_node_info_unref(alias_info);
+    } else {
         g_clear_error(&err);
     }
     g_dbus_node_info_unref(menu_info);

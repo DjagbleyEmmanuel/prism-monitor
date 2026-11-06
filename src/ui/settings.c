@@ -611,7 +611,7 @@ void app_open_settings(App *app) {
         gtk_editable_set_text(GTK_EDITABLE(hook), app->config.alert_hook);
         gtk_widget_set_size_request(hook, 280, -1);
         g_signal_connect(hook, "activate", G_CALLBACK(alert_hook_changed), app);
-        g_signal_connect(hook, "focus-out-event", G_CALLBACK(alert_hook_changed), app);
+        g_signal_connect(hook, "notify::has-focus", G_CALLBACK(alert_hook_changed), app);
         gtk_box_append(GTK_BOX(alerts),
                        setting_row(section("Alert hook command", "Run on alert (env: PRISM_ALERT_MSG). Log in alerts.log."),
                                    hook));
@@ -676,7 +676,7 @@ void app_open_settings(App *app) {
         gtk_editable_set_text(GTK_EDITABLE(pdir), app->config.plugin_dir);
         gtk_widget_set_size_request(pdir, 280, -1);
         g_signal_connect(pdir, "activate", G_CALLBACK(plugin_dir_changed), app);
-        g_signal_connect(pdir, "focus-out-event", G_CALLBACK(plugin_dir_changed), app);
+        g_signal_connect(pdir, "notify::has-focus", G_CALLBACK(plugin_dir_changed), app);
         gtk_box_append(GTK_BOX(tray),
                        setting_row(section("Plugin directory", "Executables outputting name=value unit."),
                                    pdir));
