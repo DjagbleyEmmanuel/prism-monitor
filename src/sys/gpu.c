@@ -40,24 +40,35 @@ static double parse_csv_number(const char *text) {
 }
 
 static int gpu_probe_nvidia(Snapshot *snap) {
-    const char *command =
-        "nvidia-smi --query-gpu=name,utilization.gpu,memory.used,memory.total,"
-        "temperature.gpu,power.draw,power.limit,clocks.gr,clocks.mem "
-        "--format=csv,noheader,nounits 2>/dev/null";
-    FILE *pipe = popen(command, "r");
-    if (pipe == NULL) {
+    gchar *argv[] = {
+        "nvidia-smi",
+        "--query-gpu=name,utilization.gpu,memory.used,memory.total,"
+        "temperature.gpu,power.draw,power.limit,clocks.gr,clocks.mem,"
+        "fan.speed",
+        "--format=csv,noheader,nounits", NULL};
+    gchar *output = NULL;
+    GError *err = NULL;
+    if (!g_spawn_sync(NULL, argv, NULL,
+                      G_SPAWN_SEARCH_PATH,
+                      NULL, NULL, &output, NULL, NULL, &err) ||
+        output == NULL) {
+        g_free(output);
+        g_clear_error(&err);
         return 0;
     }
     int added = 0;
-    char line[1024];
-    while (fgets(line, sizeof(line), pipe) != NULL && snap->gpu_count < PRISM_MAX_GPUS) {
+    char *save = NULL;
+    char *line = strtok_r(output, "\n", &save);
+    while (line != NULL && snap->gpu_count < PRISM_MAX_GPUS) {
         g_strstrip(line);
         if (line[0] == '\0') {
+            line = strtok_r(NULL, "\n", &save);
             continue;
         }
         char **fields = g_strsplit(line, ",", -1);
         if (fields[0] == NULL) {
             g_strfreev(fields);
+            line = strtok_r(NULL, "\n", &save);
             continue;
         }
         GpuInfo *gpu = &snap->gpus[snap->gpu_count];
@@ -74,11 +85,13 @@ static int gpu_probe_nvidia(Snapshot *snap) {
         gpu->power_limit_w = parse_csv_number(g_strv_length(fields) > 6 ? fields[6] : NULL);
         gpu->clock_core_mhz = parse_csv_number(g_strv_length(fields) > 7 ? fields[7] : NULL);
         gpu->clock_mem_mhz = parse_csv_number(g_strv_length(fields) > 8 ? fields[8] : NULL);
+        gpu->fan_pct = parse_csv_number(g_strv_length(fields) > 9 ? fields[9] : NULL);
         g_strfreev(fields);
         snap->gpu_count++;
         added++;
+        line = strtok_r(NULL, "\n", &save);
     }
-    pclose(pipe);
+    g_free(output);
     return added;
 }
 
@@ -139,6 +152,47 @@ static void gpu_probe_sysfs(Snapshot *snap) {
             gpu->util_pct = strtod(busy, NULL);
             g_free(busy);
         }
+        /* AMD: mem_info, power, fan, clocks */
+        snprintf(path, sizeof(path), "/sys/class/drm/%s/device/mem_info_vram_used", entry);
+        {
+            char *v = prism_read_first_line(path);
+            if (v != NULL) {
+                gpu->vram_used_mb = strtod(v, NULL) / 1048576.0;
+                g_free(v);
+            }
+            snprintf(path, sizeof(path), "/sys/class/drm/%s/device/mem_info_vram_total", entry);
+            v = prism_read_first_line(path);
+            if (v != NULL) {
+                gpu->vram_total_mb = strtod(v, NULL) / 1048576.0;
+                g_free(v);
+            }
+            snprintf(path, sizeof(path), "/sys/class/drm/%s/device/pp_dpm_sclk", entry);
+            /* pp_dpm_sclk first line is header; try to find active clock */
+            char *clk = prism_read_file(path);
+            if (clk != NULL) {
+                const char *p = strstr(clk, "*");
+                double mhz = 0;
+                if (p != NULL) {
+                    p = strchr(p, ' ');
+                    if (p != NULL) {
+                        mhz = strtod(p, NULL);
+                    }
+                }
+                if (mhz > 0) {
+                    gpu->clock_core_mhz = mhz;
+                }
+                g_free(clk);
+            }
+        }
+        /* Intel i915: engine info via debugfs is root-only; try sysfs gt clocks */
+        snprintf(path, sizeof(path), "/sys/class/drm/%s/device/gt_cur_freq_mhz", entry);
+        {
+            char *v = prism_read_first_line(path);
+            if (v != NULL) {
+                gpu->clock_core_mhz = strtod(v, NULL);
+                g_free(v);
+            }
+        }
         snprintf(path, sizeof(path), "/sys/class/drm/%s/device/hwmon", entry);
         GDir *hwmon = g_dir_open(path, 0, NULL);
         if (hwmon != NULL) {
@@ -147,10 +201,37 @@ static void gpu_probe_sysfs(Snapshot *snap) {
                 char temp_path[600];
                 snprintf(temp_path, sizeof(temp_path), "%s/%s/temp1_input", path, hw);
                 char *temp = prism_read_first_line(temp_path);
-                if (temp != NULL) {
+                if (temp != NULL && gpu->temp_c <= 0) {
                     gpu->temp_c = strtod(temp, NULL) / 1000.0;
                     g_free(temp);
-                    break;
+                } else {
+                    g_free(temp);
+                }
+                snprintf(temp_path, sizeof(temp_path), "%s/%s/power1_average", path, hw);
+                char *pw = prism_read_first_line(temp_path);
+                if (pw == NULL) {
+                    snprintf(temp_path, sizeof(temp_path), "%s/%s/power1_input", path, hw);
+                    pw = prism_read_first_line(temp_path);
+                }
+                if (pw != NULL) {
+                    gpu->power_w = strtod(pw, NULL) / 1000000.0;
+                    g_free(pw);
+                }
+                snprintf(temp_path, sizeof(temp_path), "%s/%s/fan1_input", path, hw);
+                char *fan = prism_read_first_line(temp_path);
+                if (fan != NULL) {
+                    gpu->fan_rpm = strtod(fan, NULL);
+                    g_free(fan);
+                }
+                snprintf(temp_path, sizeof(temp_path), "%s/%s/fan1_target", path, hw);
+                char *ft = prism_read_first_line(temp_path);
+                if (ft != NULL) {
+                    double target = strtod(ft, NULL);
+                    if (target > 0 && gpu->fan_rpm > 0) {
+                        gpu->fan_pct = gpu->fan_rpm / target * 100.0;
+                        if (gpu->fan_pct > 100) gpu->fan_pct = 100;
+                    }
+                    g_free(ft);
                 }
             }
             g_dir_close(hwmon);

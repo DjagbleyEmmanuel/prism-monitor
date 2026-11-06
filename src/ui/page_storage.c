@@ -257,9 +257,15 @@ static void disks_draw(GtkDrawingArea *area, cairo_t *cr, int width, int height,
         snprintf(title, sizeof(title), "%s", disk->model[0] ? disk->model : disk->device);
         text_draw_ellipsis(cr, layout, title, 18, y + 7, 10, PANGO_WEIGHT_BOLD,
                            t->text, TEXT_LEFT, width - 300);
-        char meta[160];
-        snprintf(meta, sizeof(meta), "%s  \xc2\xb7  %.1f GB  \xc2\xb7  %s",
-                 disk->device, disk->size_gb, disk->rotational ? "HDD" : "SSD");
+        char meta[220];
+        if (disk->smart_available) {
+            snprintf(meta, sizeof(meta), "%s  \xc2\xb7  %.1f GB  \xc2\xb7  %s  \xc2\xb7  health %.0f%%  \xc2\xb7  wear %.0f%%  \xc2\xb7  %.0fh",
+                     disk->device, disk->size_gb, disk->rotational ? "HDD" : "SSD",
+                     disk->health_pct, disk->wear_pct, disk->power_on_hours);
+        } else {
+            snprintf(meta, sizeof(meta), "%s  \xc2\xb7  %.1f GB  \xc2\xb7  %s  \xc2\xb7  SMART n/a",
+                     disk->device, disk->size_gb, disk->rotational ? "HDD" : "SSD");
+        }
         text_draw_ellipsis(cr, layout, meta, 18, y + 23, 8.4, PANGO_WEIGHT_NORMAL,
                            t->faint, TEXT_LEFT, width - 300);
         char rbuf[32], wbuf[32], temp[32];

@@ -1,6 +1,8 @@
 #include "core/alerts.h"
 
+#include <stdio.h>
 #include <string.h>
+#include <time.h>
 
 void alerts_init(AlertState *state) {
     if (state != NULL) {
@@ -61,4 +63,46 @@ int alerts_check(AlertState *state, const Snapshot *snap, int enabled,
                       battery_pct > 0;
     fired |= try_fire(state, 3, low_battery, now_us, cooldown_us);
     return fired;
+}
+
+const char *alerts_log_path(void) {
+    static char *path = NULL;
+    if (path == NULL) {
+        path = g_build_filename(g_get_user_data_dir(), "prism-monitor",
+                                "alerts.log", NULL);
+    }
+    return path;
+}
+
+void alerts_log(const char *message) {
+    if (message == NULL) {
+        return;
+    }
+    char *dir = g_path_get_dirname(alerts_log_path());
+    g_mkdir_with_parents(dir, 0700);
+    g_free(dir);
+    FILE *f = fopen(alerts_log_path(), "a");
+    if (f == NULL) {
+        return;
+    }
+    time_t now = time(NULL);
+    struct tm local;
+    localtime_r(&now, &local);
+    char stamp[32];
+    strftime(stamp, sizeof(stamp), "%Y-%m-%d %H:%M:%S", &local);
+    fprintf(f, "%s  %s\n", stamp, message);
+    fclose(f);
+}
+
+void alerts_run_hook(const char *hook_cmd, int fired_mask, const char *message) {
+    if (hook_cmd == NULL || hook_cmd[0] == '\0') {
+        return;
+    }
+    /* Hook is user-configured; run via shell with env vars */
+    gchar *argv[] = {"/bin/sh", "-c", (gchar *)hook_cmd, NULL};
+    g_setenv("PRISM_ALERT_MASK", g_strdup_printf("%d", fired_mask), TRUE);
+    g_setenv("PRISM_ALERT_MSG", message != NULL ? message : "", TRUE);
+    g_spawn_async(NULL, argv, NULL,
+                  G_SPAWN_SEARCH_PATH | G_SPAWN_DO_NOT_REAP_CHILD,
+                  NULL, NULL, NULL, NULL);
 }

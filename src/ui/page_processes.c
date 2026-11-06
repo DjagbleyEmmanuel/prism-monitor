@@ -20,7 +20,9 @@ enum {
     PROC_SORT_NAME,
     PROC_SORT_USER,
     PROC_SORT_THREADS,
-    PROC_SORT_STATE
+    PROC_SORT_STATE,
+    PROC_SORT_IO,
+    PROC_SORT_TREE
 };
 
 typedef struct ProcessPage ProcessPage;
@@ -43,7 +45,7 @@ struct ProcessPage {
 };
 
 static const char *sort_names[] = {
-    "CPU", "MEMORY", "PID", "NAME", "USER", "THREADS", "STATE"
+    "CPU", "MEMORY", "PID", "NAME", "USER", "THREADS", "STATE", "IO", "TREE"
 };
 
 static int contains_ci(const char *haystack, const char *needle) {
@@ -91,6 +93,19 @@ static int compare_proc(const void *a, const void *b, void *data) {
             break;
         case PROC_SORT_STATE:
             result = (pa->state > pb->state) - (pa->state < pb->state);
+            break;
+        case PROC_SORT_IO: {
+            double ioa = pa->io_read_bps + pa->io_write_bps;
+            double iob = pb->io_read_bps + pb->io_write_bps;
+            result = (ioa > iob) - (ioa < iob);
+            break;
+        }
+        case PROC_SORT_TREE:
+            result = (pa->tree_depth > pb->tree_depth) -
+                     (pa->tree_depth < pb->tree_depth);
+            if (result == 0) {
+                result = strcasecmp(pa->name, pb->name);
+            }
             break;
         default:
             break;
@@ -342,10 +357,20 @@ static void table_draw(GtkDrawingArea *area, cairo_t *cr, int width, int height,
         snprintf(pid, sizeof(pid), "%d", proc->pid);
         text_draw(cr, layout, pid, x_pid + 4, y, 8.6, PANGO_WEIGHT_NORMAL,
                   t->faint, TEXT_LEFT);
-        text_draw_ellipsis(cr, layout, proc->name, x_name, y, 9.5,
-                           proc->kernel_thread ? PANGO_WEIGHT_NORMAL : PANGO_WEIGHT_BOLD,
-                           proc->kernel_thread ? t->dim : t->text, TEXT_LEFT,
-                           name_w - 10);
+        {
+            char disp[80];
+            const char *prefix = "";
+            if (proc->tree_depth > 0) {
+                prefix = proc->tree_depth > 2 ? "      └─ " : "  └─ ";
+                snprintf(disp, sizeof(disp), "%s%s", prefix, proc->name);
+            } else {
+                g_strlcpy(disp, proc->name, sizeof(disp));
+            }
+            text_draw_ellipsis(cr, layout, disp, x_name, y, 9.5,
+                               proc->kernel_thread ? PANGO_WEIGHT_NORMAL : PANGO_WEIGHT_BOLD,
+                               proc->kernel_thread ? t->dim : t->text, TEXT_LEFT,
+                               name_w - 10);
+        }
         char user[32];
         snprintf(user, sizeof(user), "%s", proc->user[0] ? proc->user : "-");
         text_draw_ellipsis(cr, layout, user, x_user, y, 8.5, PANGO_WEIGHT_NORMAL,
@@ -491,15 +516,24 @@ static void details_draw(GtkDrawingArea *area, cairo_t *cr, int width, int heigh
 
     double y = 126;
     const char *labels[] = {"CPU", "Memory (RSS)", "Virtual memory", "Threads",
-                            "Nice", "Priority"};
-    char values[6][64];
+                            "Nice", "Priority", "Disk read", "Disk write",
+                            "Tree depth"};
+    char values[9][64];
     snprintf(values[0], sizeof(values[0]), "%.1f%%", sel->cpu_pct);
     fmt_bytes((double)sel->rss_kb * 1024.0, values[1], sizeof(values[1]));
     fmt_bytes((double)sel->vsz_kb * 1024.0, values[2], sizeof(values[2]));
     snprintf(values[3], sizeof(values[3]), "%d", sel->threads);
     snprintf(values[4], sizeof(values[4]), "%d", sel->nice);
     snprintf(values[5], sizeof(values[5]), "%d", loaded ? details->priority : sel->nice);
-    for (int i = 0; i < 6; i++) {
+    {
+        char r[32], w[32];
+        fmt_rate(sel->io_read_bps, r, sizeof(r));
+        fmt_rate(sel->io_write_bps, w, sizeof(w));
+        snprintf(values[6], sizeof(values[6]), "%s  (%llu B)", r, sel->io_read_bytes);
+        snprintf(values[7], sizeof(values[7]), "%s  (%llu B)", w, sel->io_write_bytes);
+    }
+    snprintf(values[8], sizeof(values[8]), "%d", sel->tree_depth);
+    for (int i = 0; i < 9; i++) {
         text_draw(cr, layout, labels[i], 18, y, 8.7, PANGO_WEIGHT_NORMAL, t->faint,
                   TEXT_LEFT);
         text_draw(cr, layout, values[i], width - 18, y, 9.2, PANGO_WEIGHT_BOLD,
@@ -665,6 +699,72 @@ static void action_pause(GtkButton *button, gpointer data) {
     page_processes_pause(data);
 }
 
+static void renice_done(App *app, const char *command, gpointer data) {
+    (void)data;
+    const ProcInfo *proc = selected_process(app);
+    if (proc == NULL || command == NULL) {
+        return;
+    }
+    int nice = atoi(command);
+    if (proc_set_nice(proc->pid, nice) == 0) {
+        app_notify(app, "Nice set to %d for %s", nice, proc->name);
+    } else {
+        app_notify(app, "Cannot set nice (need permission?)");
+    }
+}
+
+static void affinity_done(App *app, const char *command, gpointer data) {
+    (void)data;
+    const ProcInfo *proc = selected_process(app);
+    if (proc == NULL || command == NULL) {
+        return;
+    }
+    if (proc_set_affinity(proc->pid, command) == 0) {
+        app_notify(app, "Affinity %s for %s", command, proc->name);
+    } else {
+        app_notify(app, "Cannot set affinity (need permission?)");
+    }
+}
+
+static void action_renice(GtkButton *button, gpointer data) {
+    (void)button;
+    App *app = data;
+    if (selected_process(app) == NULL) {
+        app_notify(app, "Select a process first");
+        return;
+    }
+    manage_command_dialog(app, "Set nice (-20..19)",
+                          "Higher nice = lower CPU priority. Needs permission for negative values.",
+                          "10", renice_done, app);
+}
+
+static void action_affinity(GtkButton *button, gpointer data) {
+    (void)button;
+    App *app = data;
+    if (selected_process(app) == NULL) {
+        app_notify(app, "Select a process first");
+        return;
+    }
+    manage_command_dialog(app, "Set CPU affinity",
+                          "CPU list, e.g. 0, 0-3, 0,2,4. Empty = all CPUs.",
+                          "0", affinity_done, app);
+}
+
+static void action_killtree(GtkButton *button, gpointer data) {
+    (void)button;
+    App *app = data;
+    const ProcInfo *proc = selected_process(app);
+    if (proc == NULL) {
+        app_notify(app, "Select a process first");
+        return;
+    }
+    if (proc_kill_tree(proc->pid, SIGTERM) == 0) {
+        app_notify(app, "SIGTERM sent to tree of %s", proc->name);
+    } else {
+        app_notify(app, "Cannot signal tree of %s", proc->name);
+    }
+}
+
 GtkWidget *page_processes_create(App *app) {
     ProcessPage *page = g_new0(ProcessPage, 1);
     page->app = app;
@@ -683,11 +783,20 @@ GtkWidget *page_processes_create(App *app) {
     GtkWidget *end = prism_button("End Task", NULL);
     GtkWidget *kill = prism_button("Force Kill", "danger");
     GtkWidget *pause = prism_button("Pause / Resume", NULL);
+    GtkWidget *renice = prism_button("Renice", NULL);
+    GtkWidget *aff = prism_button("Affinity", NULL);
+    GtkWidget *tree = prism_button("Kill Tree", "danger");
     g_signal_connect(end, "clicked", G_CALLBACK(action_end), app);
     g_signal_connect(kill, "clicked", G_CALLBACK(action_kill), app);
     g_signal_connect(pause, "clicked", G_CALLBACK(action_pause), app);
+    g_signal_connect(renice, "clicked", G_CALLBACK(action_renice), app);
+    g_signal_connect(aff, "clicked", G_CALLBACK(action_affinity), app);
+    g_signal_connect(tree, "clicked", G_CALLBACK(action_killtree), app);
     gtk_box_append(GTK_BOX(toolbar), end);
     gtk_box_append(GTK_BOX(toolbar), pause);
+    gtk_box_append(GTK_BOX(toolbar), renice);
+    gtk_box_append(GTK_BOX(toolbar), aff);
+    gtk_box_append(GTK_BOX(toolbar), tree);
     gtk_box_append(GTK_BOX(toolbar), kill);
     gtk_box_append(GTK_BOX(content), toolbar);
 

@@ -36,6 +36,16 @@ void config_defaults(Config *config) {
     config->window_width = 1600;
     config->window_height = 1000;
     config->current_page = 0;
+    config->alert_hook[0] = '\0';
+    config->tray_enabled = 0;
+    config->start_minimized = 0;
+    config->autostart = 0;
+    config->history_persist = 1;
+    config->page_mask = (1u << 18) - 1;
+    for (int i = 0; i < 18; i++) {
+        config->page_order[i] = i;
+    }
+    config->plugin_dir[0] = '\0';
 }
 
 const char *config_path(void) {
@@ -127,6 +137,49 @@ void config_load(Config *config) {
                                        config->window_height);
     config->current_page = config_int(keyfile, "window", "page",
                                       config->current_page);
+    {
+        char *hook = g_key_file_get_string(keyfile, "alerts", "hook", NULL);
+        if (hook != NULL && hook[0] != '\0') {
+            g_strlcpy(config->alert_hook, hook, sizeof(config->alert_hook));
+        }
+        g_free(hook);
+        char *pdir = g_key_file_get_string(keyfile, "plugins", "dir", NULL);
+        if (pdir != NULL && pdir[0] != '\0') {
+            g_strlcpy(config->plugin_dir, pdir, sizeof(config->plugin_dir));
+        }
+        g_free(pdir);
+    }
+    config->tray_enabled = config_bool(keyfile, "tray", "enabled",
+                                       config->tray_enabled);
+    config->start_minimized = config_bool(keyfile, "tray", "start_minimized",
+                                          config->start_minimized);
+    config->autostart = config_bool(keyfile, "tray", "autostart",
+                                    config->autostart);
+    config->history_persist = config_bool(keyfile, "performance",
+                                          "history_persist",
+                                          config->history_persist);
+    config->page_mask = (unsigned int)config_int(keyfile, "dashboard",
+                                                 "page_mask",
+                                                 (int)config->page_mask);
+    {
+        char *order = g_key_file_get_string(keyfile, "dashboard", "page_order",
+                                            NULL);
+        if (order != NULL) {
+            char *copy = g_strdup(order);
+            char *save = NULL;
+            char *tok = strtok_r(copy, ",", &save);
+            int idx = 0;
+            while (tok != NULL && idx < 18) {
+                int v = atoi(tok);
+                if (v >= 0 && v < 18) {
+                    config->page_order[idx++] = v;
+                }
+                tok = strtok_r(NULL, ",", &save);
+            }
+            g_free(copy);
+        }
+        g_free(order);
+    }
     config->fps = config_int(keyfile, "performance", "fps", config->fps);
     config->quality = config_int(keyfile, "performance", "quality", config->quality);
     config->history_multiplier = config_double(keyfile, "performance",
@@ -162,6 +215,31 @@ void config_load(Config *config) {
     config->window_width = CLAMP(config->window_width, 1120, 7680);
     config->window_height = CLAMP(config->window_height, 720, 4320);
     config->current_page = CLAMP(config->current_page, 0, 17);
+    if (config->page_mask == 0) {
+        config->page_mask = (1u << 18) - 1;
+    }
+    config->page_mask &= (1u << 18) - 1;
+    /* validate page_order is a permutation-ish list; fill missing */
+    {
+        int seen[18] = {0};
+        int out[18];
+        int n = 0;
+        for (int i = 0; i < 18; i++) {
+            int v = config->page_order[i];
+            if (v >= 0 && v < 18 && !seen[v]) {
+                seen[v] = 1;
+                out[n++] = v;
+            }
+        }
+        for (int v = 0; v < 18 && n < 18; v++) {
+            if (!seen[v]) {
+                out[n++] = v;
+            }
+        }
+        for (int i = 0; i < 18; i++) {
+            config->page_order[i] = out[i];
+        }
+    }
     g_key_file_free(keyfile);
 }
 
@@ -207,6 +285,26 @@ void config_save(const Config *config) {
     g_key_file_set_integer(keyfile, "window", "width", config->window_width);
     g_key_file_set_integer(keyfile, "window", "height", config->window_height);
     g_key_file_set_integer(keyfile, "window", "page", config->current_page);
+    g_key_file_set_string(keyfile, "alerts", "hook", config->alert_hook);
+    g_key_file_set_boolean(keyfile, "tray", "enabled", config->tray_enabled);
+    g_key_file_set_boolean(keyfile, "tray", "start_minimized",
+                           config->start_minimized);
+    g_key_file_set_boolean(keyfile, "tray", "autostart", config->autostart);
+    g_key_file_set_boolean(keyfile, "performance", "history_persist",
+                           config->history_persist);
+    g_key_file_set_integer(keyfile, "dashboard", "page_mask",
+                           (int)config->page_mask);
+    {
+        char order[128] = "";
+        for (int i = 0; i < 18; i++) {
+            char tmp[8];
+            snprintf(tmp, sizeof(tmp), "%s%d", i ? "," : "",
+                     config->page_order[i]);
+            g_strlcat(order, tmp, sizeof(order));
+        }
+        g_key_file_set_string(keyfile, "dashboard", "page_order", order);
+    }
+    g_key_file_set_string(keyfile, "plugins", "dir", config->plugin_dir);
     char *directory = g_path_get_dirname(config_path());
     g_mkdir_with_parents(directory, 0700);
     g_free(directory);

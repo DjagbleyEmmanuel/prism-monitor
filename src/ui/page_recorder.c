@@ -1,6 +1,7 @@
 #include "core/common.h"
 #include "core/export.h"
 #include "core/format.h"
+#include "core/history.h"
 #include "ui/app.h"
 #include "ui/manage.h"
 #include "ui/pages.h"
@@ -59,6 +60,18 @@ static void recorder_stamp(double epoch, char *buf, size_t len) {
     strftime(buf, len, "%Y-%m-%d %H:%M:%S", &local);
 }
 
+typedef struct {
+    char path[512];
+    guint64 size;
+    gint64 mtime;
+    int samples;
+    double started;
+    double interval;
+} RecorderCache;
+
+static RecorderCache recorder_cache[PRISM_MAX_RECORDINGS];
+static int recorder_cache_count = 0;
+
 static void recorder_scan(RecorderPage *page) {
     page->count = 0;
     char dir_path[512];
@@ -85,22 +98,47 @@ static void recorder_scan(RecorderPage *page) {
         entry->bytes = (guint64)info.st_size;
         entry->started = (double)info.st_mtime;
         entry->interval = 1.0;
-        FILE *file = fopen(path, "r");
-        if (file != NULL) {
-            char line[256];
-            int lines = 0;
-            while (fgets(line, sizeof(line), file) != NULL && lines < 2000000) {
-                if (strncmp(line, "# started=", 10) == 0) {
-                    entry->started = strtod(line + 10, NULL);
-                } else if (strncmp(line, "# interval=", 11) == 0) {
-                    entry->interval = strtod(line + 11, NULL);
-                }
-                if (line[0] != '#') {
-                    lines++;
-                }
+        /* Cache by path+size+mtime to avoid re-reading large TSVs */
+        int cached = 0;
+        for (int c = 0; c < recorder_cache_count; c++) {
+            if (strcmp(recorder_cache[c].path, path) == 0 &&
+                recorder_cache[c].size == (guint64)info.st_size &&
+                recorder_cache[c].mtime == (gint64)info.st_mtime) {
+                entry->samples = recorder_cache[c].samples;
+                entry->started = recorder_cache[c].started;
+                entry->interval = recorder_cache[c].interval;
+                cached = 1;
+                break;
             }
-            entry->samples = lines;
-            fclose(file);
+        }
+        if (!cached) {
+            FILE *file = fopen(path, "r");
+            if (file != NULL) {
+                char line[256];
+                int lines = 0;
+                /* Only need header + line count; read in larger chunks */
+                while (fgets(line, sizeof(line), file) != NULL && lines < 2000000) {
+                    if (strncmp(line, "# started=", 10) == 0) {
+                        entry->started = strtod(line + 10, NULL);
+                    } else if (strncmp(line, "# interval=", 11) == 0) {
+                        entry->interval = strtod(line + 11, NULL);
+                    }
+                    if (line[0] != '#') {
+                        lines++;
+                    }
+                }
+                entry->samples = lines;
+                fclose(file);
+            }
+            if (recorder_cache_count < PRISM_MAX_RECORDINGS) {
+                RecorderCache *cc = &recorder_cache[recorder_cache_count++];
+                g_strlcpy(cc->path, path, sizeof(cc->path));
+                cc->size = (guint64)info.st_size;
+                cc->mtime = (gint64)info.st_mtime;
+                cc->samples = entry->samples;
+                cc->started = entry->started;
+                cc->interval = entry->interval;
+            }
         }
         page->count++;
     }
@@ -268,6 +306,180 @@ static void recorder_export(GtkButton *button, gpointer data) {
     g_object_unref(dialog);
 }
 
+typedef struct {
+    History hist;
+    double interval;
+    char name[128];
+} ReplayState;
+
+static void replay_cpu_draw(GtkDrawingArea *area, cairo_t *cr, int w, int h, gpointer data) {
+    (void)area;
+    ReplayState *st = data;
+    /* Use current app theme via a dummy: we draw via chart helpers needing Theme.
+     * Instead draw simple polyline ourselves to avoid Theme plumbing. */
+    cairo_set_source_rgb(cr, 0.12, 0.13, 0.16);
+    cairo_paint(cr);
+    cairo_set_source_rgb(cr, 0.3, 0.6, 1.0);
+    cairo_set_line_width(cr, 2);
+    int n = st->hist.count;
+    if (n < 2) {
+        return;
+    }
+    for (int i = 0; i < n; i++) {
+        float v = history_get(st->hist.cpu_total, &st->hist, n - 1 - i);
+        double x = 20 + (w - 40) * i / (double)(n - 1);
+        double y = h - 20 - (h - 40) * (v / 100.0);
+        if (i == 0) cairo_move_to(cr, x, y);
+        else cairo_line_to(cr, x, y);
+    }
+    cairo_stroke(cr);
+    cairo_set_source_rgb(cr, 1, 1, 1);
+    cairo_move_to(cr, 20, 20);
+    cairo_show_text(cr, "CPU % (replay)");
+}
+
+static void replay_mem_draw(GtkDrawingArea *area, cairo_t *cr, int w, int h, gpointer data) {
+    (void)area;
+    ReplayState *st = data;
+    cairo_set_source_rgb(cr, 0.12, 0.13, 0.16);
+    cairo_paint(cr);
+    cairo_set_source_rgb(cr, 0.6, 0.4, 1.0);
+    cairo_set_line_width(cr, 2);
+    int n = st->hist.count;
+    if (n < 2) return;
+    for (int i = 0; i < n; i++) {
+        float v = history_get(st->hist.mem_used, &st->hist, n - 1 - i);
+        double x = 20 + (w - 40) * i / (double)(n - 1);
+        double y = h - 20 - (h - 40) * (v / 100.0);
+        if (i == 0) cairo_move_to(cr, x, y);
+        else cairo_line_to(cr, x, y);
+    }
+    cairo_stroke(cr);
+    cairo_set_source_rgb(cr, 1, 1, 1);
+    cairo_move_to(cr, 20, 20);
+    cairo_show_text(cr, "Memory % (replay)");
+}
+
+static void replay_net_draw(GtkDrawingArea *area, cairo_t *cr, int w, int h, gpointer data) {
+    (void)area;
+    ReplayState *st = data;
+    cairo_set_source_rgb(cr, 0.12, 0.13, 0.16);
+    cairo_paint(cr);
+    int n = st->hist.count;
+    if (n < 2) return;
+    float maxv = 1;
+    for (int i = 0; i < n; i++) {
+        float rx = history_get(st->hist.net_rx, &st->hist, i);
+        float tx = history_get(st->hist.net_tx, &st->hist, i);
+        if (rx > maxv) maxv = rx;
+        if (tx > maxv) maxv = tx;
+    }
+    cairo_set_source_rgb(cr, 0.2, 0.7, 0.9);
+    cairo_set_line_width(cr, 2);
+    for (int i = 0; i < n; i++) {
+        float v = history_get(st->hist.net_rx, &st->hist, n - 1 - i);
+        double x = 20 + (w - 40) * i / (double)(n - 1);
+        double y = h - 20 - (h - 40) * (v / maxv);
+        if (i == 0) cairo_move_to(cr, x, y);
+        else cairo_line_to(cr, x, y);
+    }
+    cairo_stroke(cr);
+    cairo_set_source_rgb(cr, 1, 1, 1);
+    cairo_move_to(cr, 20, 20);
+    cairo_show_text(cr, "Network RX (replay)");
+}
+
+static void recorder_replay_clicked(GtkButton *button, gpointer data) {
+    (void)button;
+    RecorderPage *page = data;
+    if (page->selected < 0 || page->selected >= page->count) {
+        app_notify(page->app, "Select a recording first");
+        return;
+    }
+    const RecordingEntry *entry = &page->items[page->selected];
+    char *text = prism_read_file(entry->path);
+    if (text == NULL) {
+        app_notify(page->app, "Cannot read recording");
+        return;
+    }
+    ReplayState *st = g_new0(ReplayState, 1);
+    g_strlcpy(st->name, entry->name, sizeof(st->name));
+    st->interval = entry->interval;
+    history_clear(&st->hist);
+    char *copy = g_strdup(text);
+    char *save = NULL;
+    char *line = strtok_r(copy, "\n", &save);
+    Snapshot tmp;
+    while (line != NULL) {
+        double v[12];
+        char *c2 = g_strdup(line);
+        char *s2 = NULL;
+        char *tok = strtok_r(c2, "\t\r\n", &s2);
+        int n = 0;
+        while (tok != NULL && n < 12) {
+            v[n++] = strtod(tok, NULL);
+            tok = strtok_r(NULL, "\t\r\n", &s2);
+        }
+        g_free(c2);
+        if (n == 12) {
+            memset(&tmp, 0, sizeof(tmp));
+            tmp.cpu.usage_pct = v[1];
+            tmp.mem.used_pct = v[2];
+            tmp.mem.swap_pct = v[3];
+            tmp.net_rx_bps = v[4];
+            tmp.net_tx_bps = v[5];
+            tmp.cpu.temp_c = v[9];
+            tmp.cpu.load1 = v[11];
+            tmp.cpu.core_count = 1;
+            tmp.cpu.per_core[0] = v[1];
+            tmp.gpu_count = 1;
+            tmp.gpus[0].present = 1;
+            tmp.gpus[0].util_pct = v[8];
+            tmp.disk_count = 1;
+            tmp.disks[0].read_bps = v[6];
+            tmp.disks[0].write_bps = v[7];
+            history_push(&st->hist, &tmp);
+        }
+        line = strtok_r(NULL, "\n", &save);
+    }
+    g_free(copy);
+    g_free(text);
+    GtkWidget *window = gtk_window_new();
+    gtk_window_set_title(GTK_WINDOW(window), st->name);
+    gtk_window_set_transient_for(GTK_WINDOW(window), page->app->window);
+    gtk_window_set_default_size(GTK_WINDOW(window), 900, 700);
+    GtkWidget *header = gtk_header_bar_new();
+    GtkWidget *done = gtk_button_new_with_label("Close");
+    gtk_widget_add_css_class(done, "suggested-action");
+    g_signal_connect_swapped(done, "clicked", G_CALLBACK(gtk_window_destroy), window);
+    gtk_header_bar_pack_end(GTK_HEADER_BAR(header), done);
+    gtk_window_set_titlebar(GTK_WINDOW(window), header);
+    GtkWidget *box = gtk_box_new(GTK_ORIENTATION_VERTICAL, 10);
+    gtk_widget_set_margin_start(box, 16);
+    gtk_widget_set_margin_end(box, 16);
+    gtk_widget_set_margin_top(box, 16);
+    gtk_widget_set_margin_bottom(box, 16);
+    GtkWidget *cpu = gtk_drawing_area_new();
+    gtk_widget_set_size_request(cpu, 800, 180);
+    gtk_drawing_area_set_draw_func(GTK_DRAWING_AREA(cpu), replay_cpu_draw, st, NULL);
+    GtkWidget *mem = gtk_drawing_area_new();
+    gtk_widget_set_size_request(mem, 800, 180);
+    gtk_drawing_area_set_draw_func(GTK_DRAWING_AREA(mem), replay_mem_draw, st, NULL);
+    GtkWidget *net = gtk_drawing_area_new();
+    gtk_widget_set_size_request(net, 800, 180);
+    gtk_drawing_area_set_draw_func(GTK_DRAWING_AREA(net), replay_net_draw, st, NULL);
+    gtk_box_append(GTK_BOX(box), cpu);
+    gtk_box_append(GTK_BOX(box), mem);
+    gtk_box_append(GTK_BOX(box), net);
+    char info[256];
+    snprintf(info, sizeof(info), "%d samples  ·  %.2f s interval  ·  CPU/Mem/Net replay",
+             st->hist.count, st->interval);
+    gtk_box_append(GTK_BOX(box), prism_label(info, "dim"));
+    gtk_window_set_child(GTK_WINDOW(window), box);
+    g_object_set_data_full(G_OBJECT(window), "replay-state", st, g_free);
+    gtk_window_present(GTK_WINDOW(window));
+}
+
 static void recorder_detail(RecorderPage *page, int index) {
     ManagePage *ui = page->ui;
     page->live_elapsed = NULL;
@@ -326,9 +538,11 @@ static void recorder_detail(RecorderPage *page, int index) {
     GtkWidget *remove = prism_button("Delete", "danger");
     GtkWidget *csv = prism_button("Export CSV", NULL);
     GtkWidget *json = prism_button("Export JSON", NULL);
+    GtkWidget *replay = prism_button("Replay", NULL);
     g_object_set_data(G_OBJECT(csv), "format", GINT_TO_POINTER(0));
     g_object_set_data(G_OBJECT(json), "format", GINT_TO_POINTER(1));
     gtk_box_append(GTK_BOX(actions), folder);
+    gtk_box_append(GTK_BOX(actions), replay);
     gtk_box_append(GTK_BOX(actions), csv);
     gtk_box_append(GTK_BOX(actions), json);
     gtk_box_append(GTK_BOX(actions), remove);
@@ -336,6 +550,7 @@ static void recorder_detail(RecorderPage *page, int index) {
     g_signal_connect(remove, "clicked", G_CALLBACK(recorder_delete), page);
     g_signal_connect(csv, "clicked", G_CALLBACK(recorder_export), page);
     g_signal_connect(json, "clicked", G_CALLBACK(recorder_export), page);
+    g_signal_connect(replay, "clicked", G_CALLBACK(recorder_replay_clicked), page);
 }
 
 static void recorder_select(GtkListBox *box, GtkListBoxRow *row, gpointer data) {

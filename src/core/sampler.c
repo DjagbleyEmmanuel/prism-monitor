@@ -1,6 +1,7 @@
 #include "core/sampler.h"
 
 #include "core/common.h"
+#include "core/plugins.h"
 #include "sys/cpu.h"
 #include "sys/disk.h"
 #include "sys/gpu.h"
@@ -47,6 +48,10 @@ struct Sampler {
     ConnectionInfo connection_cache[PRISM_MAX_CONNECTIONS];
     int connection_cache_count;
     TcpInfo tcp_cache;
+    PluginInfo plugin_cache[PRISM_MAX_PLUGINS];
+    int plugin_cache_count;
+    double last_plugins;
+    char plugin_dir[256];
 };
 
 static void sampler_collect(Sampler *sampler, double now) {
@@ -116,6 +121,15 @@ static void sampler_collect(Sampler *sampler, double now) {
         sampler->last_tcp = now;
     } else {
         snap->tcp = sampler->tcp_cache;
+    }
+    if (now - sampler->last_plugins >= 5.0 || sampler->last_plugins == 0) {
+        plugins_run(snap, sampler->plugin_dir[0] ? sampler->plugin_dir : NULL);
+        sampler->plugin_cache_count = snap->plugin_count;
+        memcpy(sampler->plugin_cache, snap->plugins, sizeof(sampler->plugin_cache));
+        sampler->last_plugins = now;
+    } else {
+        snap->plugin_count = sampler->plugin_cache_count;
+        memcpy(snap->plugins, sampler->plugin_cache, sizeof(snap->plugins));
     }
 
     sampler->last_time = now;
@@ -271,6 +285,30 @@ gboolean sampler_is_paused(Sampler *sampler) {
     gboolean paused = sampler->paused;
     g_mutex_unlock(&sampler->mutex);
     return paused;
+}
+
+int sampler_load_history(Sampler *sampler) {
+    if (sampler == NULL) {
+        return 0;
+    }
+    g_mutex_lock(&sampler->mutex);
+    int n = history_load(&sampler->history);
+    g_mutex_unlock(&sampler->mutex);
+    return n;
+}
+
+void sampler_set_plugin_dir(Sampler *sampler, const char *dir) {
+    if (sampler == NULL) {
+        return;
+    }
+    g_mutex_lock(&sampler->mutex);
+    if (dir != NULL) {
+        g_strlcpy(sampler->plugin_dir, dir, sizeof(sampler->plugin_dir));
+    } else {
+        sampler->plugin_dir[0] = '\0';
+    }
+    sampler->last_plugins = 0;
+    g_mutex_unlock(&sampler->mutex);
 }
 
 void sampler_invalidate_aux(Sampler *sampler) {

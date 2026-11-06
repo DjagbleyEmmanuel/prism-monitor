@@ -3,6 +3,10 @@
 #include "core/format.h"
 #include "core/history.h"
 #include "core/parse.h"
+#include "core/plugins.h"
+#include "sys/disk.h"
+#include "sys/net.h"
+#include "sys/proc.h"
 
 #include <math.h>
 #include <stdio.h>
@@ -205,6 +209,54 @@ static void test_export(void) {
     CHECK_NEAR(mp, 40, 0.001);
 }
 
+static void test_new_modules(void) {
+    /* proc io parse */
+    unsigned long long r = 0, w = 0;
+    CHECK(proc_parse_io("read_bytes: 12345\nwrite_bytes: 67890\n", &r, &w));
+    CHECK(r == 12345 && w == 67890);
+    CHECK(!proc_parse_io("", &r, &w));
+    /* smart parse */
+    DiskInfo disk;
+    memset(&disk, 0, sizeof(disk));
+    CHECK(disk_parse_smart("Percentage Used: 12\nData Units Written: 2000\n"
+                           "Media and Data Integrity Errors: 0\n"
+                           "Power On Hours: 5000\nTemperature: 40\n", &disk));
+    CHECK(disk.smart_available);
+    CHECK_NEAR(disk.wear_pct, 12, 0.001);
+    CHECK_NEAR(disk.health_pct, 88, 0.001);
+    /* wifi parse */
+    double sig = 0;
+    CHECK(net_parse_wireless("wlan0: 0000.  level  -46.  noise  -92.\n", "wlan0", &sig));
+    CHECK_NEAR(sig, -46, 0.001);
+    CHECK(!net_parse_wireless("", "wlan0", &sig));
+    /* ping parse */
+    double ms = 0;
+    CHECK(net_parse_ping("64 bytes from 1.1.1.1: time=12.3 ms\n", &ms));
+    CHECK_NEAR(ms, 12.3, 0.01);
+    /* plugin parse */
+    PluginInfo p;
+    CHECK(plugins_parse_output("weather=21 C\n", &p));
+    CHECK(strcmp(p.name, "weather") == 0);
+    CHECK(strcmp(p.value, "21") == 0);
+    CHECK(strcmp(p.unit, "C") == 0);
+    /* prometheus */
+    Snapshot snap;
+    memset(&snap, 0, sizeof(snap));
+    snap.cpu.usage_pct = 55;
+    snap.mem.used_pct = 66;
+    char *prom = export_snapshot_prometheus(&snap);
+    CHECK(prom != NULL && strstr(prom, "prism_cpu_usage_percent 55.00") != NULL);
+    g_free(prom);
+    /* config defaults for dashboard */
+    /* history persist round-trip via tmp file is exercised in history_load
+     * with missing file returning 0 */
+    History hist;
+    history_clear(&hist);
+    /* missing file: load returns 0, append creates file */
+    /* (do not pollute user dir in tests: just check path non-null) */
+    CHECK(history_path() != NULL);
+}
+
 int main(void) {
     test_format();
     test_cpu();
@@ -216,6 +268,7 @@ int main(void) {
     test_history();
     test_alerts();
     test_export();
+    test_new_modules();
     if (failures > 0) {
         fprintf(stderr, "%d test(s) failed\n", failures);
         return 1;

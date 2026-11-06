@@ -4,7 +4,7 @@ Fast, native system monitor for Linux — live CPU, memory, GPU, storage,
 network, process, sensor and power telemetry with custom Cairo charts on
 GTK 4.
 
-![Version](https://img.shields.io/badge/version-1.2.0-blue)
+![Version](https://img.shields.io/badge/version-1.3.0-blue)
 ![GTK](https://img.shields.io/badge/GTK-4-green)
 ![License](https://img.shields.io/badge/license-MIT-lightgrey)
 
@@ -27,6 +27,21 @@ Plus:
 - Flight recorder — timestamped TSV telemetry in the user data directory
 - systemd services, autostart entries, sockets, kernel modules,
   Flatpak/Snap/desktop apps, disk-space analyser
+
+### New in 1.3.0
+
+- Process I/O + tree view, renice/affinity/kill-tree
+- Persistent history (`history.tsv`, restored on launch, 5 MB rotation)
+- Chart PNG export + recorder replay (CPU/Mem/Net charts from TSV)
+- SMART/NVMe health, AMD/Intel GPU fan/power/VRAM, Wi-Fi signal + ping
+- CPU governor/EPP/turbo controls, journal viewer, connection kill (`ss -K`)
+- DiskSpace trash/delete, duplicate-size finder, treemap bars
+- Tray mode (close minimizes), autostart, `--tray/--minimized/--daemon`
+- Custom dashboard: show/hide/reorder pages (Settings → Dashboard)
+- Plugins (`~/.config/prism-monitor/plugins/`, `name=value unit`)
+- Alert hooks (env `PRISM_ALERT_MSG`) + `alerts.log`
+- Diagnostics bundle (`--diagnostics`, palette), Prometheus exporter (`--exporter PORT`)
+- Flatpak manifest, gettext skeleton (`po/`, `make i18n`), CI with ASan
 
 ### New in 1.2.0
 

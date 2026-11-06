@@ -39,9 +39,27 @@ void prism_hover_attach(GtkWidget *area, HoverInfo *hover) {
     gtk_widget_add_controller(area, motion);
 }
 
+void prism_set_a11y(GtkWidget *widget, const char *name, const char *desc) {
+    if (widget == NULL) {
+        return;
+    }
+    GtkAccessible *accessible = GTK_ACCESSIBLE(widget);
+    if (accessible != NULL) {
+        gtk_accessible_update_property(accessible, GTK_ACCESSIBLE_PROPERTY_LABEL,
+                                       name != NULL ? name : "Prism widget", -1);
+        if (desc != NULL) {
+            gtk_accessible_update_property(accessible,
+                                           GTK_ACCESSIBLE_PROPERTY_DESCRIPTION,
+                                           desc, -1);
+        }
+    }
+    gtk_widget_set_focusable(widget, TRUE);
+}
+
 GtkWidget *prism_area(App *app, int height, GtkDrawingAreaDrawFunc draw,
                       gpointer data) {
     GtkWidget *area = gtk_drawing_area_new();
+    prism_set_a11y(area, "Prism chart", "Live telemetry chart. Values are also shown as text in status bar.");
     gtk_widget_set_hexpand(area, TRUE);
     gtk_widget_set_vexpand(area, TRUE);
     gtk_widget_set_size_request(area, 80, height);

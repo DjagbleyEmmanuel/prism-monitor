@@ -27,4 +27,11 @@ gboolean export_tsv_stats(const char *tsv_text, double *cpu_peak,
                           double *cpu_avg, double *mem_peak, double *mem_avg,
                           int *rows);
 
+/* Prometheus text format for one snapshot. Caller frees. */
+char *export_snapshot_prometheus(const Snapshot *snap);
+
+/* Write a diagnostic bundle tar.gz. Returns path (caller frees) or NULL. */
+char *export_diagnostics_bundle(const Snapshot *snap, const History *hist,
+                                const char *config_path);
+
 #endif

@@ -293,3 +293,69 @@ void cpu_read(CpuReader *reader, CpuInfo *out, double elapsed) {
     out->package_power_w = cpu_package_power(reader, elapsed);
     read_cpu_strings(reader, out);
 }
+
+static int write_sysfs(const char *path, const char *value) {
+    FILE *f = fopen(path, "w");
+    if (f == NULL) {
+        return -1;
+    }
+    fputs(value, f);
+    return fclose(f) == 0 ? 0 : -1;
+}
+
+int cpu_set_governor(const char *governor) {
+    if (governor == NULL || governor[0] == '\0') {
+        return -1;
+    }
+    /* Validate against known governors to avoid arbitrary sysfs writes */
+    static const char *valid[] = {"performance", "powersave", "ondemand",
+                                  "conservative", "schedutil", "userspace", NULL};
+    int ok = 0;
+    for (int i = 0; valid[i] != NULL; i++) {
+        if (strcmp(governor, valid[i]) == 0) {
+            ok = 1;
+            break;
+        }
+    }
+    if (!ok) {
+        return -1;
+    }
+    char path[256];
+    snprintf(path, sizeof(path),
+             "/sys/devices/system/cpu/cpu0/cpufreq/scaling_governor");
+    return write_sysfs(path, governor);
+}
+
+int cpu_set_epp(const char *epp) {
+    if (epp == NULL || epp[0] == '\0') {
+        return -1;
+    }
+    static const char *valid[] = {"performance", "balance_performance",
+                                  "default", "balance_power", "power", NULL};
+    int ok = 0;
+    for (int i = 0; valid[i] != NULL; i++) {
+        if (strcmp(epp, valid[i]) == 0) {
+            ok = 1;
+            break;
+        }
+    }
+    if (!ok) {
+        return -1;
+    }
+    return write_sysfs(
+        "/sys/devices/system/cpu/cpu0/cpufreq/energy_performance_preference", epp);
+}
+
+int cpu_set_turbo(int enabled) {
+    return write_sysfs("/sys/devices/system/cpu/intel_pstate/no_turbo",
+                       enabled ? "0" : "1");
+}
+
+int cpu_set_online(int cpu, int online) {
+    if (cpu <= 0 || cpu >= PRISM_MAX_CORES) {
+        return -1;
+    }
+    char path[256];
+    snprintf(path, sizeof(path), "/sys/devices/system/cpu/cpu%d/online", cpu);
+    return write_sysfs(path, online ? "1" : "0");
+}

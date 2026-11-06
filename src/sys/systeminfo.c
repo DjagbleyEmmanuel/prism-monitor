@@ -11,6 +11,7 @@
 #include <stdlib.h>
 #include <sys/stat.h>
 #include <sys/utsname.h>
+#include <sys/wait.h>
 #include <time.h>
 #include <unistd.h>
 #include <utmpx.h>
@@ -235,9 +236,12 @@ typedef struct {
 
 static void service_merge_unit_files(Snapshot *snap) {
     gchar *output = NULL;
-    if (!g_spawn_command_line_sync(
-            "systemctl list-unit-files --type=service --no-pager --no-legend --plain",
-            &output, NULL, NULL, NULL) || output == NULL) {
+    gchar *argv[] = {"systemctl", "list-unit-files", "--type=service",
+                     "--no-pager", "--no-legend", "--plain", NULL};
+    if (!g_spawn_sync(NULL, argv, NULL,
+                      G_SPAWN_SEARCH_PATH,
+                      NULL, NULL, &output, NULL, NULL, NULL) ||
+        output == NULL) {
         g_free(output);
         return;
     }
@@ -270,9 +274,12 @@ static void service_merge_unit_files(Snapshot *snap) {
 void services_read(Snapshot *snap) {
     snap->service_count = 0;
     gchar *output = NULL;
-    if (!g_spawn_command_line_sync(
-            "systemctl list-units --type=service --all --no-pager --no-legend --plain",
-            &output, NULL, NULL, NULL) || output == NULL) {
+    gchar *argv[] = {"systemctl", "list-units", "--type=service", "--all",
+                     "--no-pager", "--no-legend", "--plain", NULL};
+    if (!g_spawn_sync(NULL, argv, NULL,
+                      G_SPAWN_SEARCH_PATH,
+                      NULL, NULL, &output, NULL, NULL, NULL) ||
+        output == NULL) {
         g_free(output);
         return;
     }
@@ -365,11 +372,92 @@ void startup_set_enabled(const StartupInfo *item, int enabled) {
 }
 
 static void service_run(const char *verb, const char *unit) {
-    char *quoted = g_shell_quote(unit);
-    char *command = g_strdup_printf("systemctl %s %s", verb, quoted);
-    g_spawn_command_line_async(command, NULL);
-    g_free(command);
-    g_free(quoted);
+    if (verb == NULL || unit == NULL || unit[0] == '\0') {
+        return;
+    }
+    static const char *valid[] = {"start", "stop", "restart", "enable",
+                                  "disable", "status", "is-active",
+                                  "is-enabled", "reload", NULL};
+    int ok = 0;
+    for (int i = 0; valid[i] != NULL; i++) {
+        if (strcmp(verb, valid[i]) == 0) {
+            ok = 1;
+            break;
+        }
+    }
+    if (!ok) {
+        return;
+    }
+    gchar *argv[] = {"systemctl", (gchar *)verb, (gchar *)unit, NULL};
+    g_spawn_async(NULL, argv, NULL,
+                  G_SPAWN_SEARCH_PATH | G_SPAWN_DO_NOT_REAP_CHILD,
+                  NULL, NULL, NULL, NULL);
+}
+
+char *service_journal(const char *unit, int lines) {
+    if (unit == NULL || unit[0] == '\0') {
+        return NULL;
+    }
+    if (lines <= 0) {
+        lines = 50;
+    }
+    if (lines > 500) {
+        lines = 500;
+    }
+    char n[16];
+    snprintf(n, sizeof(n), "%d", lines);
+    gchar *argv[] = {"journalctl", "-u", (gchar *)unit, "-n", n,
+                     "--no-pager", "--output=short-iso", NULL};
+    gchar *out = NULL;
+    GError *err = NULL;
+    if (!g_spawn_sync(NULL, argv, NULL,
+                      G_SPAWN_SEARCH_PATH,
+                      NULL, NULL, &out, NULL, NULL, &err)) {
+        g_free(out);
+        g_clear_error(&err);
+        return NULL;
+    }
+    return out;
+}
+
+char *system_journal(int lines) {
+    if (lines <= 0) {
+        lines = 100;
+    }
+    if (lines > 1000) {
+        lines = 1000;
+    }
+    char n[16];
+    snprintf(n, sizeof(n), "%d", lines);
+    gchar *argv[] = {"journalctl", "-n", n, "--no-pager",
+                     "--output=short-iso", NULL};
+    gchar *out = NULL;
+    GError *err = NULL;
+    if (!g_spawn_sync(NULL, argv, NULL,
+                      G_SPAWN_SEARCH_PATH,
+                      NULL, NULL, &out, NULL, NULL, &err)) {
+        g_free(out);
+        g_clear_error(&err);
+        return NULL;
+    }
+    return out;
+}
+
+int connection_kill(const ConnectionInfo *conn) {
+    if (conn == NULL || conn->remote[0] == '\0') {
+        return -1;
+    }
+    /* ss -K dst <remote> -- needs root/cap; best-effort */
+    gchar *argv[] = {"ss", "-K", "dst", (gchar *)conn->remote, NULL};
+    GError *err = NULL;
+    int status = 0;
+    if (!g_spawn_sync(NULL, argv, NULL,
+                      G_SPAWN_SEARCH_PATH,
+                      NULL, NULL, NULL, NULL, &status, &err)) {
+        g_clear_error(&err);
+        return -1;
+    }
+    return WIFEXITED(status) && WEXITSTATUS(status) == 0 ? 0 : -1;
 }
 
 void service_action(const char *unit, const char *verb) {

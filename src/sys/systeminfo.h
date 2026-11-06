@@ -12,5 +12,8 @@ void service_action(const char *unit, const char *verb);
 void system_run_command(const char *command);
 void tcp_read(TcpInfo *out);
 void connections_read(Snapshot *snap);
+char *service_journal(const char *unit, int lines);
+char *system_journal(int lines);
+int connection_kill(const ConnectionInfo *conn);
 
 #endif

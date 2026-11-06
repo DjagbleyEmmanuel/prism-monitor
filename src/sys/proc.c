@@ -6,11 +6,46 @@
 #include <fcntl.h>
 #include <glib.h>
 #include <signal.h>
+#include <sched.h>
 #include <stdlib.h>
 #include <string.h>
+#include <sys/resource.h>
 #include <sys/stat.h>
 #include <sys/types.h>
 #include <unistd.h>
+
+gboolean proc_parse_io(const char *text, unsigned long long *read_bytes,
+                       unsigned long long *write_bytes) {
+    if (text == NULL) {
+        return FALSE;
+    }
+    gboolean ok = FALSE;
+    const char *p = text;
+    while ((p = strstr(p, "read_bytes:")) != NULL) {
+        *read_bytes = strtoull(p + 11, NULL, 10);
+        ok = TRUE;
+        break;
+    }
+    p = text;
+    while ((p = strstr(p, "write_bytes:")) != NULL) {
+        *write_bytes = strtoull(p + 12, NULL, 10);
+        break;
+    }
+    return ok;
+}
+
+static void read_proc_io(int pid, unsigned long long *read_bytes,
+                         unsigned long long *write_bytes) {
+    *read_bytes = 0;
+    *write_bytes = 0;
+    char path[64];
+    snprintf(path, sizeof(path), "/proc/%d/io", pid);
+    char *text = prism_read_file(path);
+    if (text != NULL) {
+        proc_parse_io(text, read_bytes, write_bytes);
+        g_free(text);
+    }
+}
 
 void proc_reader_init(ProcReader *reader) {
     memset(reader, 0, sizeof(*reader));
@@ -173,10 +208,23 @@ void proc_read(ProcReader *reader, Snapshot *snap, double elapsed) {
         if (prev < 0) {
             proc->kernel_thread = is_kernel_thread(pid, uid);
         }
+        read_proc_io(pid, &proc->io_read_bytes, &proc->io_write_bytes);
+        if (prev >= 0 && elapsed > 0) {
+            if (proc->io_read_bytes >= reader->prev[prev].io_read) {
+                proc->io_read_bps = (double)(proc->io_read_bytes -
+                                             reader->prev[prev].io_read) / elapsed;
+            }
+            if (proc->io_write_bytes >= reader->prev[prev].io_write) {
+                proc->io_write_bps = (double)(proc->io_write_bytes -
+                                              reader->prev[prev].io_write) / elapsed;
+            }
+        }
         if (next_count < PRISM_MAX_PROCS) {
             next[next_count].pid = pid;
             next[next_count].ticks = ticks;
             next[next_count].kernel_thread = (unsigned char)proc->kernel_thread;
+            next[next_count].io_read = proc->io_read_bytes;
+            next[next_count].io_write = proc->io_write_bytes;
             next_count++;
         }
         g_free(stat_text);
@@ -184,6 +232,26 @@ void proc_read(ProcReader *reader, Snapshot *snap, double elapsed) {
     }
     g_dir_close(dir);
     snap->proc_count = count;
+    /* tree depth: walk ppid chain, capped at 8 */
+    for (int i = 0; i < count; i++) {
+        int depth = 0;
+        int ppid = snap->procs[i].ppid;
+        for (int guard = 0; guard < 8 && ppid > 1; guard++) {
+            int found = 0;
+            for (int j = 0; j < count; j++) {
+                if (snap->procs[j].pid == ppid) {
+                    ppid = snap->procs[j].ppid;
+                    found = 1;
+                    break;
+                }
+            }
+            if (!found) {
+                break;
+            }
+            depth++;
+        }
+        snap->procs[i].tree_depth = depth;
+    }
     memcpy(reader->prev, next, (size_t)next_count * sizeof(next[0]));
     reader->prev_count = next_count;
     qsort(reader->prev, reader->prev_count, sizeof(ProcPrev), prev_compare);
@@ -253,6 +321,7 @@ int proc_details(int pid, ProcDetails *out) {
     if (len > 0) {
         out->exe[len] = '\0';
     }
+    read_proc_io(pid, &out->io_read_bytes, &out->io_write_bytes);
     snprintf(path, sizeof(path), "/proc/%d/cwd", pid);
     len = readlink(path, out->cwd, sizeof(out->cwd) - 1);
     if (len > 0) {
@@ -267,4 +336,72 @@ int proc_signal(int pid, int signal_number) {
         return -1;
     }
     return kill(pid, signal_number);
+}
+
+int proc_set_nice(int pid, int nice) {
+    if (pid <= 1 || nice < -20 || nice > 19) {
+        return -1;
+    }
+    return setpriority(PRIO_PROCESS, (id_t)pid, nice);
+}
+
+int proc_set_ionice(int pid, int level) {
+    if (pid <= 1 || level < 0 || level > 7) {
+        return -1;
+    }
+    char path[64];
+    snprintf(path, sizeof(path), "/proc/%d/ionice", pid);
+    /* ioprio_set via syscall number 251 on x86_64, best-effort */
+    int priority = (2 << 13) | level; /* IOPRIO_CLASS_BE=2 */
+#ifdef SYS_ioprio_set
+    return syscall(SYS_ioprio_set, 1, pid, priority);
+#else
+    (void)priority;
+    return -1;
+#endif
+}
+
+int proc_set_affinity(int pid, const char *cpuset) {
+    if (pid <= 1 || cpuset == NULL || cpuset[0] == '\0') {
+        return -1;
+    }
+    cpu_set_t set;
+    CPU_ZERO(&set);
+    char *copy = g_strdup(cpuset);
+    char *save = NULL;
+    char *tok = strtok_r(copy, ",", &save);
+    int any = 0;
+    while (tok != NULL) {
+        char *dash = strchr(tok, '-');
+        if (dash != NULL) {
+            *dash = '\0';
+            int lo = atoi(tok);
+            int hi = atoi(dash + 1);
+            for (int c = lo; c <= hi && c < CPU_SETSIZE; c++) {
+                CPU_SET(c, &set);
+                any = 1;
+            }
+        } else {
+            int c = atoi(tok);
+            if (c >= 0 && c < CPU_SETSIZE) {
+                CPU_SET(c, &set);
+                any = 1;
+            }
+        }
+        tok = strtok_r(NULL, ",", &save);
+    }
+    g_free(copy);
+    if (!any) {
+        return -1;
+    }
+    return sched_setaffinity((pid_t)pid, sizeof(set), &set);
+}
+
+int proc_kill_tree(int pid, int signal_number) {
+    if (pid <= 1) {
+        return -1;
+    }
+    /* Best-effort: signal process group if it is a group leader,
+     * otherwise just the process. Caller should confirm in UI. */
+    return kill(-pid, signal_number) == 0 ? 0 : kill(pid, signal_number);
 }

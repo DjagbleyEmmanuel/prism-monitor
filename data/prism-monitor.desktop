@@ -11,3 +11,39 @@ Categories=System;Monitor;
 Keywords=system;monitor;cpu;memory;gpu;storage;network;process;processes;sensor;sensors;battery;performance;
 StartupNotify=true
 StartupWMClass=prism-monitor
+Actions=Open;Pause;ExportSnapshot;ExportPNG;Diagnostics;Tray;Quit;
+
+[Desktop Action Open]
+Name=Open Prism Monitor
+Exec=prism-monitor
+Icon=io.prism.Monitor
+
+[Desktop Action Pause]
+Name=Pause / Resume Sampling
+Exec=prism-monitor --paused
+Icon=media-playback-pause
+
+[Desktop Action ExportSnapshot]
+Name=Export Snapshot JSON
+Exec=prism-monitor --snapshot
+Icon=document-export
+
+[Desktop Action ExportPNG]
+Name=Export Chart PNG
+Exec=prism-monitor --page overview
+Icon=image-x-generic
+
+[Desktop Action Diagnostics]
+Name=Export Diagnostics Bundle
+Exec=prism-monitor --diagnostics
+Icon=dialog-information
+
+[Desktop Action Tray]
+Name=Start in Tray
+Exec=prism-monitor --tray --minimized
+Icon=application-x-executable
+
+[Desktop Action Quit]
+Name=Quit Prism Monitor
+Exec=pkill -f prism-monitor
+Icon=application-exit

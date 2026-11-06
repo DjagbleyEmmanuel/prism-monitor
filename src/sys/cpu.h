@@ -20,5 +20,9 @@ typedef struct {
 
 void cpu_reader_init(CpuReader *reader);
 void cpu_read(CpuReader *reader, CpuInfo *out, double elapsed);
+int cpu_set_governor(const char *governor);
+int cpu_set_epp(const char *epp);
+int cpu_set_turbo(int enabled);
+int cpu_set_online(int cpu, int online);
 
 #endif

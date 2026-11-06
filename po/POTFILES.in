@@ -1,0 +1,5 @@
+src/main.c
+src/ui/shell.c
+src/ui/settings.c
+src/ui/page_overview.c
+src/ui/page_processes.c

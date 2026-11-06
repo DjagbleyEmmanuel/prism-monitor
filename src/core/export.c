@@ -5,6 +5,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <time.h>
 
 char *export_json_escape(const char *text) {
     if (text == NULL) {
@@ -267,4 +268,133 @@ gboolean export_tsv_stats(const char *tsv_text, double *cpu_peak,
     if (mem_avg) *mem_avg = ms / n;
     if (rows) *rows = n;
     return TRUE;
+}
+
+char *export_snapshot_prometheus(const Snapshot *snap) {
+    if (snap == NULL) {
+        return g_strdup("# no snapshot\n");
+    }
+    GString *s = g_string_new("");
+    g_string_append_printf(s, "# HELP prism_cpu_usage_percent CPU usage\n");
+    g_string_append_printf(s, "# TYPE prism_cpu_usage_percent gauge\n");
+    g_string_append_printf(s, "prism_cpu_usage_percent %.2f\n", snap->cpu.usage_pct);
+    g_string_append_printf(s, "prism_cpu_temp_celsius %.1f\n", snap->cpu.temp_c);
+    g_string_append_printf(s, "prism_cpu_freq_mhz %.1f\n", snap->cpu.freq_mhz);
+    g_string_append_printf(s, "prism_cpu_load1 %.2f\n", snap->cpu.load1);
+    g_string_append_printf(s, "prism_mem_used_percent %.2f\n", snap->mem.used_pct);
+    g_string_append_printf(s, "prism_mem_swap_percent %.2f\n", snap->mem.swap_pct);
+    g_string_append_printf(s, "prism_net_rx_bps %.1f\n", snap->net_rx_bps);
+    g_string_append_printf(s, "prism_net_tx_bps %.1f\n", snap->net_tx_bps);
+    g_string_append_printf(s, "prism_procs_total %d\n", snap->proc_count);
+    g_string_append_printf(s, "prism_sensors_total %d\n", snap->sensor_count);
+    g_string_append_printf(s, "prism_ping_ms %.1f\n", snap->ping_ms);
+    for (int i = 0; i < snap->gpu_count; i++) {
+        g_string_append_printf(s, "prism_gpu_util_percent{gpu=\"%s\"} %.2f\n",
+                               snap->gpus[i].name, snap->gpus[i].util_pct);
+        g_string_append_printf(s, "prism_gpu_temp_celsius{gpu=\"%s\"} %.1f\n",
+                               snap->gpus[i].name, snap->gpus[i].temp_c);
+    }
+    for (int i = 0; i < snap->disk_count; i++) {
+        g_string_append_printf(s, "prism_disk_read_bps{disk=\"%s\"} %.1f\n",
+                               snap->disks[i].device, snap->disks[i].read_bps);
+        g_string_append_printf(s, "prism_disk_write_bps{disk=\"%s\"} %.1f\n",
+                               snap->disks[i].device, snap->disks[i].write_bps);
+    }
+    return g_string_free(s, FALSE);
+}
+
+char *export_diagnostics_bundle(const Snapshot *snap, const History *hist,
+                                const char *config_path) {
+    char *dir = g_build_filename(g_get_user_data_dir(), "prism-monitor",
+                                 "diagnostics", NULL);
+    g_mkdir_with_parents(dir, 0700);
+    time_t now = time(NULL);
+    struct tm local;
+    localtime_r(&now, &local);
+    char stamp[32];
+    strftime(stamp, sizeof(stamp), "%Y%m%d-%H%M%S", &local);
+    char *bundle_dir = g_build_filename(dir, stamp, NULL);
+    g_mkdir_with_parents(bundle_dir, 0700);
+    /* snapshot.json */
+    {
+        char *p = g_build_filename(bundle_dir, "snapshot.json", NULL);
+        export_snapshot_json_file(p, snap, hist);
+        g_free(p);
+    }
+    /* config.ini copy */
+    if (config_path != NULL) {
+        char *p = g_build_filename(bundle_dir, "config.ini", NULL);
+        gchar *contents = NULL;
+        gsize len = 0;
+        if (g_file_get_contents(config_path, &contents, &len, NULL)) {
+            g_file_set_contents(p, contents, len, NULL);
+            g_free(contents);
+        }
+        g_free(p);
+    }
+    /* system info */
+    {
+        char *p = g_build_filename(bundle_dir, "system.txt", NULL);
+        FILE *f = fopen(p, "w");
+        if (f != NULL) {
+            fprintf(f, "Prism Monitor diagnostics %s\n", stamp);
+            if (snap != NULL) {
+                fprintf(f, "host=%s kernel=%s distro=%s cpu=%s\n",
+                        snap->sys.hostname, snap->sys.kernel,
+                        snap->sys.distro, snap->sys.cpu_model);
+                fprintf(f, "uptime=%.0f procs=%d sensors=%d disks=%d gpus=%d\n",
+                        snap->uptime_s, snap->proc_count, snap->sensor_count,
+                        snap->disk_count, snap->gpu_count);
+            }
+            fclose(f);
+        }
+        g_free(p);
+    }
+    /* alerts.log + history tail */
+    {
+        const char *paths[] = {NULL, NULL};
+        char *alog = g_build_filename(g_get_user_data_dir(), "prism-monitor",
+                                      "alerts.log", NULL);
+        char *histp = g_build_filename(g_get_user_data_dir(), "prism-monitor",
+                                       "history.tsv", NULL);
+        paths[0] = alog;
+        paths[1] = histp;
+        const char *names[] = {"alerts.log", "history.tsv"};
+        for (int i = 0; i < 2; i++) {
+            char *p = g_build_filename(bundle_dir, names[i], NULL);
+            gchar *contents = NULL;
+            gsize len = 0;
+            if (g_file_get_contents(paths[i], &contents, &len, NULL)) {
+                /* truncate history to last ~200KB for bundle */
+                if (len > 200 * 1024) {
+                    contents += len - 200 * 1024;
+                    len = 200 * 1024;
+                    g_file_set_contents(p, contents, len, NULL);
+                    contents -= len;
+                } else {
+                    g_file_set_contents(p, contents, len, NULL);
+                }
+                g_free(contents);
+            }
+            g_free(p);
+        }
+        g_free(alog);
+        g_free(histp);
+    }
+    /* tar.gz via argv */
+    char *tar_path = g_strconcat(bundle_dir, ".tar.gz", NULL);
+    gchar *argv[] = {"tar", "-czf", tar_path, "-C", dir, stamp, NULL};
+    GError *err = NULL;
+    if (!g_spawn_sync(NULL, argv, NULL,
+                      G_SPAWN_SEARCH_PATH,
+                      NULL, NULL, NULL, NULL, NULL, &err)) {
+        g_clear_error(&err);
+        g_free(tar_path);
+        g_free(bundle_dir);
+        g_free(dir);
+        return NULL;
+    }
+    g_free(bundle_dir);
+    g_free(dir);
+    return tar_path;
 }

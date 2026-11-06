@@ -218,6 +218,16 @@ static void interfaces_draw(GtkDrawingArea *area, cairo_t *cr, int width, int he
     draw_icon(cr, "network", (Rect){17, 15, 15, 15}, t->cyan, 1.7);
     text_draw(cr, layout, "INTERFACES", 39, 23, 10.5, PANGO_WEIGHT_BOLD, t->dim,
               TEXT_LEFT);
+    {
+        char ping[64];
+        if (app->view->ping_ms > 0) {
+            snprintf(ping, sizeof(ping), "ping 1.1.1.1  %.0f ms", app->view->ping_ms);
+        } else {
+            snprintf(ping, sizeof(ping), "ping 1.1.1.1  --");
+        }
+        text_draw(cr, layout, ping, width / 2.0, 23, 8.3, PANGO_WEIGHT_BOLD,
+                  t->faint, TEXT_CENTER);
+    }
     text_draw(cr, layout, "RATE IN / OUT", width - 126, 23, 8.3, PANGO_WEIGHT_BOLD,
               t->faint, TEXT_RIGHT);
     text_draw(cr, layout, "TOTAL", width - 18, 23, 8.3, PANGO_WEIGHT_BOLD,
@@ -234,10 +244,16 @@ static void interfaces_draw(GtkDrawingArea *area, cairo_t *cr, int width, int he
         }
         text_draw(cr, layout, nic->name, 18, y + 8, 10.5, PANGO_WEIGHT_BOLD,
                   t->text, TEXT_LEFT);
-        char state_text[64];
-        snprintf(state_text, sizeof(state_text), "%s  \xc2\xb7  %s  \xc2\xb7  %s",
-                 nic->state, nic->wireless ? "wireless" : "wired",
-                 nic->ipv4[0] ? nic->ipv4 : "no IPv4");
+        char state_text[128];
+        if (nic->wireless && nic->wifi_signal_dbm != 0) {
+            snprintf(state_text, sizeof(state_text), "%s  \xc2\xb7  wifi  \xc2\xb7  %.0f dBm  \xc2\xb7  %.0f MHz  \xc2\xb7  %s",
+                     nic->state, nic->wifi_signal_dbm, nic->wifi_freq_mhz,
+                     nic->ipv4[0] ? nic->ipv4 : "no IPv4");
+        } else {
+            snprintf(state_text, sizeof(state_text), "%s  \xc2\xb7  %s  \xc2\xb7  %s",
+                     nic->state, nic->wireless ? "wireless" : "wired",
+                     nic->ipv4[0] ? nic->ipv4 : "no IPv4");
+        }
         text_draw_ellipsis(cr, layout, state_text, 18, y + 24, 8.4,
                            PANGO_WEIGHT_NORMAL, t->faint, TEXT_LEFT, width - 320);
         char rates[96];

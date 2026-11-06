@@ -206,6 +206,55 @@ static void disk_analyze_thread(GTask *task, gpointer source, gpointer data,
     g_task_return_pointer(task, analysis, g_free);
 }
 
+static void disk_reveal_clicked(GtkButton *button, gpointer data) {
+    (void)data;
+    const char *path = g_object_get_data(G_OBJECT(button), "disk-path");
+    if (path == NULL) {
+        return;
+    }
+    char *dir = g_path_get_dirname(path);
+    char *quoted = g_shell_quote(dir);
+    char *cmd = g_strdup_printf("xdg-open %s", quoted);
+    g_spawn_command_line_async(cmd, NULL);
+    g_free(cmd);
+    g_free(quoted);
+    g_free(dir);
+}
+
+static void disk_trash_clicked(GtkButton *button, gpointer data) {
+    DiskPage *page = data;
+    const char *path = g_object_get_data(G_OBJECT(button), "disk-path");
+    if (path == NULL) {
+        return;
+    }
+    GFile *file = g_file_new_for_path(path);
+    GError *err = NULL;
+    if (g_file_trash(file, NULL, &err)) {
+        app_notify(page->app, "Moved to trash: %s", path);
+    } else {
+        app_notify(page->app, "Cannot trash: %s", err != NULL ? err->message : "error");
+    }
+    g_clear_error(&err);
+    g_object_unref(file);
+}
+
+static void disk_delete_clicked(GtkButton *button, gpointer data) {
+    DiskPage *page = data;
+    const char *path = g_object_get_data(G_OBJECT(button), "disk-path");
+    if (path == NULL) {
+        return;
+    }
+    GFile *file = g_file_new_for_path(path);
+    GError *err = NULL;
+    if (g_file_delete(file, NULL, &err)) {
+        app_notify(page->app, "Deleted: %s", path);
+    } else {
+        app_notify(page->app, "Cannot delete: %s", err != NULL ? err->message : "error");
+    }
+    g_clear_error(&err);
+    g_object_unref(file);
+}
+
 static void disk_item_size(guint64 size, char *buf, size_t len) {
     fmt_bytes((double)size, buf, len);
 }
@@ -253,6 +302,38 @@ static void disk_analysis_show(DiskPage *page, DiskAnalysis *analysis) {
         manage_detail_row(ui, "Folder", value);
     }
 
+    manage_detail_heading(ui, "Storage treemap (by folder)");
+    for (int i = 0; i < analysis->dir_count; i++) {
+        DiskItem *item = &analysis->dirs[i];
+        double pct = analysis->total > 0
+            ? (double)item->size / (double)analysis->total * 100.0 : 0;
+        int bar_len = (int)(pct * 2);
+        if (bar_len > 40) bar_len = 40;
+        char bar[48];
+        for (int b = 0; b < bar_len; b++) bar[b] = '#';
+        bar[bar_len] = '\0';
+        disk_item_size(item->size, size, sizeof(size));
+        char value[600];
+        snprintf(value, sizeof(value), "%s %s  (%s, %.1f%%)", bar, item->path, size, pct);
+        manage_detail_row(ui, "Folder", value);
+    }
+
+    /* Duplicate finder: same size files among top list */
+    {
+        int dups = 0;
+        for (int i = 0; i < analysis->file_count; i++) {
+            for (int j = i + 1; j < analysis->file_count; j++) {
+                if (analysis->files[i].size == analysis->files[j].size &&
+                    analysis->files[i].size > 0) {
+                    dups++;
+                }
+            }
+        }
+        char dup[96];
+        snprintf(dup, sizeof(dup), "%d possible duplicate size matches in top files", dups);
+        manage_detail_row(ui, "Duplicates", dup);
+    }
+
     manage_detail_heading(ui, "File types");
     for (int i = 0; i < analysis->type_count; i++) {
         char value[64];
@@ -261,6 +342,26 @@ static void disk_analysis_show(DiskPage *page, DiskAnalysis *analysis) {
         disk_item_size(analysis->types[i].size, size, sizeof(size));
         snprintf(value, sizeof(value), "%s  \xc2\xb7  %.1f%%", size, pct);
         manage_detail_row(ui, analysis->types[i].name, value);
+    }
+
+    /* Actions for largest file: reveal / trash / delete */
+    if (analysis->file_count > 0) {
+        GtkWidget *actions = manage_detail_actions(ui);
+        GtkWidget *reveal = prism_button("Reveal largest", NULL);
+        GtkWidget *trash = prism_button("Move to Trash", NULL);
+        GtkWidget *del = prism_button("Delete largest", "danger");
+        char *path_copy = g_strdup(analysis->files[0].path);
+        g_object_set_data_full(G_OBJECT(reveal), "disk-path", path_copy, g_free);
+        char *path2 = g_strdup(analysis->files[0].path);
+        g_object_set_data_full(G_OBJECT(trash), "disk-path", path2, g_free);
+        char *path3 = g_strdup(analysis->files[0].path);
+        g_object_set_data_full(G_OBJECT(del), "disk-path", path3, g_free);
+        gtk_box_append(GTK_BOX(actions), reveal);
+        gtk_box_append(GTK_BOX(actions), trash);
+        gtk_box_append(GTK_BOX(actions), del);
+        g_signal_connect(reveal, "clicked", G_CALLBACK(disk_reveal_clicked), page);
+        g_signal_connect(trash, "clicked", G_CALLBACK(disk_trash_clicked), page);
+        g_signal_connect(del, "clicked", G_CALLBACK(disk_delete_clicked), page);
     }
 }
 

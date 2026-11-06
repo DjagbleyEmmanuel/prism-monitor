@@ -1,5 +1,6 @@
 #include "core/common.h"
 #include "core/format.h"
+#include "sys/cpu.h"
 #include "ui/app.h"
 #include "ui/draw.h"
 #include "ui/icons.h"
@@ -181,6 +182,45 @@ static void card_draw(GtkDrawingArea *area, cairo_t *cr, int width, int height,
     text_draw_ellipsis(cr, layout, sub, 17, 76, 9.5, PANGO_WEIGHT_NORMAL, t->faint,
                        TEXT_LEFT, width - 30);
     g_object_unref(layout);
+}
+
+static void power_gov_perf(GtkButton *b, gpointer data) {
+    (void)b;
+    App *app = data;
+    if (cpu_set_governor("performance") == 0) {
+        app_notify(app, "Governor set to performance");
+    } else {
+        app_notify(app, "Cannot set governor (need root?)");
+    }
+}
+static void power_gov_save(GtkButton *b, gpointer data) {
+    (void)b;
+    App *app = data;
+    if (cpu_set_governor("powersave") == 0) {
+        app_notify(app, "Governor set to powersave");
+    } else {
+        app_notify(app, "Cannot set governor (need root?)");
+    }
+}
+static void power_epp(GtkButton *b, gpointer data) {
+    (void)b;
+    App *app = data;
+    if (cpu_set_epp("performance") == 0) {
+        app_notify(app, "EPP set to performance");
+    } else {
+        app_notify(app, "Cannot set EPP (need root / intel_pstate?)");
+    }
+}
+static void power_turbo(GtkButton *b, gpointer data) {
+    (void)b;
+    App *app = data;
+    static int enabled = 1;
+    enabled = !enabled;
+    if (cpu_set_turbo(enabled) == 0) {
+        app_notify(app, "Turbo %s", enabled ? "enabled" : "disabled");
+    } else {
+        app_notify(app, "Cannot toggle turbo (need root / intel_pstate?)");
+    }
 }
 
 static void profile_read(PowerPage *page) {
@@ -461,6 +501,24 @@ GtkWidget *page_power_create(App *app) {
     page->cores.app = app;
 
     GtkWidget *content = prism_column();
+    {
+        GtkWidget *bar = gtk_box_new(GTK_ORIENTATION_HORIZONTAL, 8);
+        GtkWidget *lbl = prism_label("Power controls (needs admin):", "dim");
+        gtk_box_append(GTK_BOX(bar), lbl);
+        GtkWidget *gov = prism_button("Governor: performance", NULL);
+        GtkWidget *gov2 = prism_button("Governor: powersave", NULL);
+        GtkWidget *epp = prism_button("EPP: performance", NULL);
+        GtkWidget *turbo = prism_button("Turbo: toggle", NULL);
+        gtk_box_append(GTK_BOX(bar), gov);
+        gtk_box_append(GTK_BOX(bar), gov2);
+        gtk_box_append(GTK_BOX(bar), epp);
+        gtk_box_append(GTK_BOX(bar), turbo);
+        g_signal_connect(gov, "clicked", G_CALLBACK(power_gov_perf), app);
+        g_signal_connect(gov2, "clicked", G_CALLBACK(power_gov_save), app);
+        g_signal_connect(epp, "clicked", G_CALLBACK(power_epp), app);
+        g_signal_connect(turbo, "clicked", G_CALLBACK(power_turbo), app);
+        gtk_box_append(GTK_BOX(content), bar);
+    }
     GtkWidget *cards = prism_grid();
     gtk_grid_set_column_homogeneous(GTK_GRID(cards), TRUE);
     for (int i = 0; i < 4; i++) {

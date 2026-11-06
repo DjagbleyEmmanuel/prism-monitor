@@ -46,6 +46,148 @@ void disk_reader_init(DiskReader *reader) {
     memset(reader, 0, sizeof(*reader));
 }
 
+static double parse_after(const char *text, const char *key) {
+    const char *p = strstr(text, key);
+    if (p == NULL) {
+        return -1;
+    }
+    p += strlen(key);
+    while (*p == ' ' || *p == '\t' || *p == ':' || *p == '=') {
+        p++;
+    }
+    return strtod(p, NULL);
+}
+
+gboolean disk_parse_smart(const char *text, DiskInfo *disk) {
+    if (text == NULL || disk == NULL) {
+        return FALSE;
+    }
+    gboolean found = FALSE;
+    double v;
+    /* NVMe smart-log style */
+    if ((v = parse_after(text, "Percentage Used")) >= 0) {
+        disk->wear_pct = v;
+        disk->smart_available = 1;
+        found = TRUE;
+    }
+    if ((v = parse_after(text, "Data Units Written")) >= 0) {
+        disk->data_written_tb = v * 0.512 / 1000.0; /* 512B units -> TB approx */
+        disk->smart_available = 1;
+        found = TRUE;
+    }
+    if ((v = parse_after(text, "Media and Data Integrity Errors")) >= 0) {
+        disk->media_errors = (unsigned long long)v;
+        disk->smart_available = 1;
+        found = TRUE;
+    }
+    if ((v = parse_after(text, "Power On Hours")) >= 0) {
+        disk->power_on_hours = v;
+        disk->smart_available = 1;
+        found = TRUE;
+    }
+    if ((v = parse_after(text, "Temperature")) >= 0 && v > 0 && v < 200) {
+        /* smartctl reports Kelvin or Celsius depending; keep sysfs temp if set */
+        if (disk->temp_c <= 0) {
+            disk->temp_c = v > 200 ? v - 273.15 : v;
+        }
+        found = TRUE;
+    }
+    /* ATA smartctl style */
+    if ((v = parse_after(text, "194 Temperature_Celsius")) >= 0 ||
+        (v = parse_after(text, "Temperature Celsius")) >= 0) {
+        if (disk->temp_c <= 0) {
+            disk->temp_c = v;
+        }
+    }
+    if ((v = parse_after(text, "9 Power_On_Hours")) >= 0) {
+        disk->power_on_hours = v;
+        disk->smart_available = 1;
+        found = TRUE;
+    }
+    if ((v = parse_after(text, "5 Reallocated_Sector_Ct")) >= 0) {
+        disk->media_errors = (unsigned long long)v;
+        disk->smart_available = 1;
+        found = TRUE;
+    }
+    if (disk->smart_available) {
+        if (disk->wear_pct > 0) {
+            disk->health_pct = 100.0 - disk->wear_pct;
+            if (disk->health_pct < 0) disk->health_pct = 0;
+        } else if (disk->media_errors == 0) {
+            disk->health_pct = 100.0;
+        } else {
+            disk->health_pct = 90.0;
+        }
+    }
+    return found;
+}
+
+void disk_smart_read(DiskInfo *disk, const char *device) {
+    /* NVMe sysfs first (no root, no external tool) */
+    char path[512];
+    snprintf(path, sizeof(path), "/sys/block/%s/device/nvme/smart_log", device);
+    char *nvme_dir = NULL;
+    /* Try NVMe sysfs via scanning */
+    GDir *nvme = g_dir_open("/sys/class/nvme", 0, NULL);
+    if (nvme != NULL) {
+        const char *entry;
+        while ((entry = g_dir_read_name(nvme)) != NULL) {
+            char link[512];
+            snprintf(link, sizeof(link), "/sys/class/nvme/%s/device", entry);
+            /* Match by checking namespace device name via symlink target is hard;
+             * just try first nvme smart_log if device starts with nvme */
+            if (strncmp(device, "nvme", 4) == 0) {
+                snprintf(path, sizeof(path),
+                         "/sys/class/nvme/%s/device/smart_log", entry);
+                char *t = prism_read_file(path);
+                if (t != NULL) {
+                    /* binary-ish; also try text files below */
+                    g_free(t);
+                }
+                snprintf(path, sizeof(path),
+                         "/sys/class/nvme/%s/device/wear_level", entry);
+                char *w = prism_read_first_line(path);
+                if (w != NULL) {
+                    disk->wear_pct = strtod(w, NULL);
+                    disk->smart_available = 1;
+                    disk->health_pct = 100.0 - disk->wear_pct;
+                    g_free(w);
+                }
+                snprintf(path, sizeof(path),
+                         "/sys/class/nvme/%s/device/media_errors", entry);
+                char *e = prism_read_first_line(path);
+                if (e != NULL) {
+                    disk->media_errors = strtoull(e, NULL, 10);
+                    disk->smart_available = 1;
+                    g_free(e);
+                }
+                break;
+            }
+        }
+        g_dir_close(nvme);
+    }
+    (void)nvme_dir;
+    if (disk->smart_available) {
+        return;
+    }
+    /* smartctl fallback via argv spawn (cached by caller cadence ~60s) */
+    gchar *argv[] = {"smartctl", "-a", NULL, NULL};
+    char devpath[64];
+    snprintf(devpath, sizeof(devpath), "/dev/%s", device);
+    argv[2] = devpath;
+    gchar *out = NULL;
+    GError *err = NULL;
+    if (g_spawn_sync(NULL, argv, NULL,
+                     G_SPAWN_SEARCH_PATH,
+                     NULL, NULL, &out, NULL, NULL, &err)) {
+        if (out != NULL) {
+            disk_parse_smart(out, disk);
+        }
+    }
+    g_free(out);
+    g_clear_error(&err);
+}
+
 void disk_read(DiskReader *reader, Snapshot *snap, double now, double elapsed) {
     DiskStatRaw stats[PRISM_MAX_DISKS * 4];
     int stat_count = 0;
@@ -100,6 +242,13 @@ void disk_read(DiskReader *reader, Snapshot *snap, double now, double elapsed) {
             disk->rotational = rot != NULL && atoi(rot) == 1;
             g_free(rot);
             disk->temp_c = disk_temp(name);
+            {
+                static double last_smart = -1000;
+                if (now - last_smart >= 60.0) {
+                    disk_smart_read(disk, name);
+                    last_smart = now;
+                }
+            }
             for (int i = 0; i < stat_count; i++) {
                 if (strcmp(stats[i].name, name) != 0) {
                     continue;

@@ -3,9 +3,11 @@
 #include "core/common.h"
 #include "core/export.h"
 #include "core/format.h"
+#include "core/history.h"
 #include "ui/draw.h"
 #include "ui/icons.h"
 #include "ui/pages.h"
+#include "ui/tray.h"
 #include "ui/theme.h"
 #include "ui/widgets.h"
 
@@ -143,12 +145,22 @@ static const int sidebar_group_sizes[] = {6, 4, 6, 2};
 static char *startup_page_name = NULL;
 static double startup_interval = 0;
 static gboolean startup_paused = FALSE;
+static gboolean startup_minimized = FALSE;
+static gboolean startup_tray = FALSE;
 
 void app_configure_startup(const char *page_name, double interval, gboolean paused) {
+    app_configure_startup_full(page_name, interval, paused, FALSE, FALSE);
+}
+
+void app_configure_startup_full(const char *page_name, double interval,
+                                gboolean paused, gboolean minimized,
+                                gboolean tray) {
     g_free(startup_page_name);
     startup_page_name = page_name != NULL ? g_strdup(page_name) : NULL;
     startup_interval = interval;
     startup_paused = paused;
+    startup_minimized = minimized;
+    startup_tray = tray;
 }
 
 int app_page_from_name(const char *name) {
@@ -173,15 +185,44 @@ static gboolean sidebar_collapsed(App *app) {
     return app->config.sidebar_collapsed != 0;
 }
 
+static gboolean page_visible(App *app, PageId id) {
+    return (app->config.page_mask & (1u << (int)id)) != 0;
+}
+
+static int page_group_of(PageId id) {
+    for (int g = 0; g < 4; g++) {
+        for (int i = 0; i < sidebar_group_sizes[g]; i++) {
+            if (sidebar_groups[g][i] == id) {
+                return g;
+            }
+        }
+    }
+    return 0;
+}
+
 static double sidebar_group_height(App *app) {
     return sidebar_collapsed(app) ? SIDEBAR_COLLAPSED_GROUP_H : SIDEBAR_GROUP_H;
 }
 
 static double sidebar_nav_height(App *app) {
     double y = SIDEBAR_TOP;
-    y += 4 * (sidebar_group_height(app) + 2.0);
-    y += 18 * SIDEBAR_ITEM_STEP;
-    y += 4 * 8.0;
+    int groups = 0, items = 0;
+    for (int g = 0; g < 4; g++) {
+        int n = 0;
+        for (int o = 0; o < PAGE_COUNT; o++) {
+            PageId id = (PageId)app->config.page_order[o];
+            if (page_group_of(id) == g && page_visible(app, id)) {
+                n++;
+            }
+        }
+        if (n > 0) {
+            groups++;
+            items += n;
+        }
+    }
+    y += groups * (sidebar_group_height(app) + 2.0);
+    y += items * SIDEBAR_ITEM_STEP;
+    y += groups * 8.0;
     return y + 6.0;
 }
 
@@ -225,13 +266,25 @@ static int sidebar_build(App *app, int height, SidebarEntry *entries, int max) {
     int count = 0;
     double y = SIDEBAR_TOP - scroll;
     for (int g = 0; g < 4; g++) {
+        /* collect visible pages in this group, in page_order sequence */
+        PageId ordered[18];
+        int ordered_n = 0;
+        for (int o = 0; o < PAGE_COUNT; o++) {
+            PageId id = (PageId)app->config.page_order[o];
+            if (page_group_of(id) == g && page_visible(app, id)) {
+                ordered[ordered_n++] = id;
+            }
+        }
+        if (ordered_n == 0) {
+            continue;
+        }
         if (count < max) {
             entries[count++] = (SidebarEntry){0, sidebar_group_names[g], NULL, 1,
                                               y, group_h};
         }
         y += group_h + 2.0;
-        for (int i = 0; i < sidebar_group_sizes[g]; i++) {
-            PageId id = sidebar_groups[g][i];
+        for (int i = 0; i < ordered_n; i++) {
+            PageId id = ordered[i];
             if (count < max) {
                 entries[count++] = (SidebarEntry){id, page_names[id], page_icons[id],
                                                   0, y, SIDEBAR_ITEM_H};
@@ -272,9 +325,20 @@ static double sidebar_page_y(App *app, PageId page) {
     double group_h = sidebar_group_height(app);
     double y = SIDEBAR_TOP;
     for (int g = 0; g < 4; g++) {
+        PageId ordered[18];
+        int n = 0;
+        for (int o = 0; o < PAGE_COUNT; o++) {
+            PageId id = (PageId)app->config.page_order[o];
+            if (page_group_of(id) == g && page_visible(app, id)) {
+                ordered[n++] = id;
+            }
+        }
+        if (n == 0) {
+            continue;
+        }
         y += group_h + 2.0;
-        for (int i = 0; i < sidebar_group_sizes[g]; i++) {
-            if (sidebar_groups[g][i] == page) {
+        for (int i = 0; i < n; i++) {
+            if (ordered[i] == page) {
                 return y;
             }
             y += SIDEBAR_ITEM_STEP;
@@ -699,27 +763,42 @@ void app_check_alerts(App *app) {
                              app->config.alert_mem_pct,
                              app->config.alert_battery_pct,
                              g_get_monotonic_time(), 60 * G_USEC_PER_SEC);
-    if (fired & ALERT_TEMP) {
-        double t = app->view->cpu.temp_c;
-        if (t <= 0 && app->view->gpu_count > 0) {
-            t = app->view->gpus[0].temp_c;
+    if (fired != 0) {
+        char msg[256];
+        if (fired & ALERT_TEMP) {
+            double t = app->view->cpu.temp_c;
+            if (t <= 0 && app->view->gpu_count > 0) {
+                t = app->view->gpus[0].temp_c;
+            }
+            snprintf(msg, sizeof(msg), "Temperature %.0f°C >= %.0f°C", t,
+                     app->config.alert_temp_c);
+            app_notify(app, "⚠ %s", msg);
+            alerts_log(msg);
+            alerts_run_hook(app->config.alert_hook, fired, msg);
         }
-        app_notify(app, "⚠ Temperature %.0f°C ≥ %.0f°C", t,
-                   app->config.alert_temp_c);
-    }
-    if (fired & ALERT_DISK) {
-        app_notify(app, "⚠ Disk %.0f%% full (limit %.0f%%)",
-                   alerts_worst_disk_pct(app->view),
-                   app->config.alert_disk_pct);
-    }
-    if (fired & ALERT_MEM) {
-        app_notify(app, "⚠ Memory %.0f%% used (limit %.0f%%)",
-                   app->view->mem.used_pct, app->config.alert_mem_pct);
-    }
-    if (fired & ALERT_BATTERY) {
-        app_notify(app, "⚠ Battery %.0f%% (limit %.0f%%)",
-                   app->view->battery.capacity_pct,
-                   app->config.alert_battery_pct);
+        if (fired & ALERT_DISK) {
+            snprintf(msg, sizeof(msg), "Disk %.0f%% full (limit %.0f%%)",
+                     alerts_worst_disk_pct(app->view),
+                     app->config.alert_disk_pct);
+            app_notify(app, "⚠ %s", msg);
+            alerts_log(msg);
+            alerts_run_hook(app->config.alert_hook, fired, msg);
+        }
+        if (fired & ALERT_MEM) {
+            snprintf(msg, sizeof(msg), "Memory %.0f%% used (limit %.0f%%)",
+                     app->view->mem.used_pct, app->config.alert_mem_pct);
+            app_notify(app, "⚠ %s", msg);
+            alerts_log(msg);
+            alerts_run_hook(app->config.alert_hook, fired, msg);
+        }
+        if (fired & ALERT_BATTERY) {
+            snprintf(msg, sizeof(msg), "Battery %.0f%% (limit %.0f%%)",
+                     app->view->battery.capacity_pct,
+                     app->config.alert_battery_pct);
+            app_notify(app, "⚠ %s", msg);
+            alerts_log(msg);
+            alerts_run_hook(app->config.alert_hook, fired, msg);
+        }
     }
 }
 
@@ -770,6 +849,155 @@ void app_export_snapshot(App *app) {
     g_object_unref(dialog);
 }
 
+void app_export_chart_png(App *app) {
+    if (app == NULL || app->view == NULL || app->view->timestamp_us == 0) {
+        if (app != NULL) {
+            app_notify(app, "No sample yet — wait a second and retry");
+        }
+        return;
+    }
+    const int W = 1200, H = 700;
+    cairo_surface_t *surface = cairo_image_surface_create(CAIRO_FORMAT_ARGB32, W, H);
+    cairo_t *cr = cairo_create(surface);
+    const Theme *t = &app->theme;
+    cairo_set_source_rgb(cr, t->bg.r, t->bg.g, t->bg.b);
+    cairo_paint(cr);
+    PangoLayout *layout = pango_cairo_create_layout(cr);
+    draw_card(cr, t, (Rect){12, 12, W - 24, H - 24}, 16);
+    char title[256];
+    snprintf(title, sizeof(title), "Prism Monitor  %s  CPU %.1f%%  Mem %.1f%%  Temp %.0fC",
+             app->view->sys.hostname, app->view->cpu.usage_pct,
+             app->view->mem.used_pct, app->view->cpu.temp_c);
+    text_draw(cr, layout, title, 28, 36, 14, PANGO_WEIGHT_BOLD, t->text, TEXT_LEFT);
+    time_t now = time(NULL);
+    struct tm local;
+    localtime_r(&now, &local);
+    char stamp[64];
+    strftime(stamp, sizeof(stamp), "%Y-%m-%d %H:%M:%S", &local);
+    text_draw(cr, layout, stamp, 28, 58, 10, PANGO_WEIGHT_NORMAL, t->faint, TEXT_LEFT);
+    ChartSeries series[] = {
+        {app->history.cpu_user, t->blue, "User"},
+        {app->history.cpu_sys, t->purple, "System"},
+        {app->history.cpu_io, t->yellow, "I/O wait"},
+        {app->history.cpu_irq, t->cyan, "IRQ"},
+    };
+    ChartSpec spec = {.history = &app->history,
+                      .rect = {24, 80, W - 48, H - 140},
+                      .series = series,
+                      .series_count = 4,
+                      .ymax = 100,
+                      .format = CHART_PERCENT,
+                      .seconds_per_sample = app->config.interval,
+                      .window = app_chart_window(app),
+                      .stacked = 1,
+                      .hover = FALSE};
+    draw_chart(cr, layout, t, &spec);
+    char foot[256];
+    snprintf(foot, sizeof(foot), "CPU %.1f%%  Mem %.1f%%  Net %.0f/%.0f B/s  Load %.2f  v%s",
+             app->view->cpu.usage_pct, app->view->mem.used_pct,
+             app->view->net_rx_bps, app->view->net_tx_bps,
+             app->view->cpu.load1, PRISM_VERSION);
+    text_draw(cr, layout, foot, 28, H - 36, 10, PANGO_WEIGHT_NORMAL, t->dim, TEXT_LEFT);
+    g_object_unref(layout);
+    cairo_destroy(cr);
+    /* save via dialog callback that writes surface */
+    /* Use a small struct via GObject data on dialog */
+    GtkFileDialog *dialog = gtk_file_dialog_new();
+    gtk_file_dialog_set_title(dialog, "Export chart (PNG)");
+    char fname[128];
+    strftime(fname, sizeof(fname), "prism-chart-%Y%m%d-%H%M%S.png", &local);
+    gtk_file_dialog_set_initial_name(dialog, fname);
+    /* stash surface in a heap struct */
+    typedef struct { cairo_surface_t *surface; App *app; } PngCtx;
+    PngCtx *ctx = g_new0(PngCtx, 1);
+    ctx->surface = surface;
+    ctx->app = app;
+    /* Use a static callback via g_object data trick: connect with lambda-like */
+    /* We instead write synchronously to user data dir and notify, plus
+     * offer dialog that writes on finish using a global */
+    /* Simpler: write to ~/Pictures via dialog finish handler below */
+    extern void prism_png_save_done(GObject *, GAsyncResult *, gpointer);
+    /* Store ctx in dialog via weak custom property using g_object_set_data */
+    g_object_set_data_full(G_OBJECT(dialog), "png-ctx", ctx, g_free);
+    gtk_file_dialog_save(dialog, GTK_WINDOW(app->window), NULL,
+                         prism_png_save_done, app);
+    g_object_unref(dialog);
+}
+
+void prism_png_save_done(GObject *source, GAsyncResult *result, gpointer data) {
+    App *app = data;
+    GtkFileDialog *dialog = GTK_FILE_DIALOG(source);
+    GError *error = NULL;
+    GFile *file = gtk_file_dialog_save_finish(dialog, result, &error);
+    void *ctx_ptr = g_object_get_data(G_OBJECT(dialog), "png-ctx");
+    if (file == NULL) {
+        g_clear_error(&error);
+        if (ctx_ptr != NULL) {
+            /* surface leaked on cancel; free via known layout */
+            /* ctx layout matches app_export_chart_png */
+            struct { cairo_surface_t *surface; App *app; } *ctx = ctx_ptr;
+            cairo_surface_destroy(ctx->surface);
+        }
+        return;
+    }
+    char *path = g_file_get_path(file);
+    if (path != NULL && ctx_ptr != NULL) {
+        struct { cairo_surface_t *surface; App *app; } *ctx = ctx_ptr;
+        cairo_surface_write_to_png(ctx->surface, path);
+        app_notify(app, "Chart PNG exported to %s", path);
+        cairo_surface_destroy(ctx->surface);
+        g_free(path);
+    }
+    g_object_unref(file);
+}
+
+void app_export_diagnostics(App *app) {
+    if (app == NULL) {
+        return;
+    }
+    char *bundle = export_diagnostics_bundle(app->view, &app->history, config_path());
+    if (bundle != NULL) {
+        app_notify(app, "Diagnostics bundle: %s", bundle);
+        g_free(bundle);
+    } else {
+        app_notify(app, "Cannot create diagnostics bundle (tar?)");
+    }
+}
+
+void app_set_autostart(App *app, gboolean enabled) {
+    if (app == NULL) {
+        return;
+    }
+    app->config.autostart = enabled ? 1 : 0;
+    char *dir = g_build_filename(g_get_user_config_dir(), "autostart", NULL);
+    g_mkdir_with_parents(dir, 0755);
+    char *path = g_build_filename(dir, "prism-monitor.desktop", NULL);
+    if (enabled) {
+        GString *s = g_string_new("");
+        g_string_append(s, "[Desktop Entry]\nType=Application\nName=Prism Monitor\nExec=prism-monitor --tray --minimized\nIcon=io.prism.Monitor\nTerminal=false\nCategories=System;Monitor;\nX-GNOME-Autostart-enabled=true\nActions=Open;Quit;\n\n[Desktop Action Open]\nName=Open Prism Monitor\nExec=prism-monitor\nIcon=io.prism.Monitor\n\n[Desktop Action Quit]\nName=Quit Prism Monitor\nExec=pkill -f prism-monitor\nIcon=application-exit\n");
+        g_file_set_contents(path, s->str, s->len, NULL);
+        g_string_free(s, TRUE);
+    } else {
+        g_unlink(path);
+    }
+    g_free(path);
+    g_free(dir);
+    app_save_config(app);
+    app_notify(app, enabled ? "Autostart enabled" : "Autostart disabled");
+}
+
+void app_tray_minimize(App *app) {
+    if (app == NULL || app->window == NULL) {
+        return;
+    }
+    if (app->config.tray_enabled) {
+        gtk_widget_set_visible(app->window, FALSE);
+    } else {
+        gtk_window_minimize(app->window);
+    }
+    app_notify(app, "Prism minimized — quit via tray menu or Ctrl+Q");
+}
+
 /* ---- command palette (Ctrl+K) ---- */
 
 typedef struct {
@@ -787,7 +1015,8 @@ typedef struct {
 } PaletteItem;
 
 enum { PAL_PAUSE = 100, PAL_EXPORT = 101, PAL_SETTINGS = 102,
-       PAL_APPEARANCE = 103, PAL_ABOUT = 104, PAL_REFRESH = 105 };
+       PAL_APPEARANCE = 103, PAL_ABOUT = 104, PAL_REFRESH = 105,
+       PAL_PNG = 106, PAL_DIAG = 107, PAL_TRAY = 108 };
 
 static void palette_activate(PaletteState *state, PaletteItem *item) {
     App *app = state->app;
@@ -801,6 +1030,9 @@ static void palette_activate(PaletteState *state, PaletteItem *item) {
             case PAL_APPEARANCE: app_open_appearance(app); break;
             case PAL_ABOUT: app_show_about(app); break;
             case PAL_REFRESH: sampler_invalidate_aux(app->sampler); app_notify(app, "Refreshing slow panels"); break;
+            case PAL_PNG: app_export_chart_png(app); break;
+            case PAL_DIAG: app_export_diagnostics(app); break;
+            case PAL_TRAY: app_tray_minimize(app); break;
             default: break;
         }
     }
@@ -817,9 +1049,13 @@ static void palette_rebuild(PaletteState *state) {
         gtk_list_box_remove(GTK_LIST_BOX(state->list), child);
         child = next;
     }
-    PaletteItem items[PAGE_COUNT + 6];
+    PaletteItem items[PAGE_COUNT + 12];
     int count = 0;
-    for (int i = 0; i < PAGE_COUNT; i++) {
+    for (int o = 0; o < PAGE_COUNT; o++) {
+        int i = state->app->config.page_order[o];
+        if (!page_visible(state->app, (PageId)i)) {
+            continue;
+        }
         items[count++] = (PaletteItem){page_names[i], page_subtitles[i], 0, i};
     }
     items[count++] = (PaletteItem){"Pause / Resume sampling", "Freeze or resume live charts (Ctrl+P)", 1, PAL_PAUSE};
@@ -828,6 +1064,9 @@ static void palette_rebuild(PaletteState *state) {
     items[count++] = (PaletteItem){"Settings", "Sampling, alerts, graphics", 1, PAL_SETTINGS};
     items[count++] = (PaletteItem){"Appearance", "Theme, accent, density", 1, PAL_APPEARANCE};
     items[count++] = (PaletteItem){"About", "Version and host info", 1, PAL_ABOUT};
+    items[count++] = (PaletteItem){"Export chart PNG", "Save CPU chart as PNG image", 1, PAL_PNG};
+    items[count++] = (PaletteItem){"Export diagnostics bundle", "Config + snapshot + logs tar.gz for bug reports", 1, PAL_DIAG};
+    items[count++] = (PaletteItem){"Minimize to tray/background", "Iconify window, keep sampling", 1, PAL_TRAY};
     int shown = 0;
     for (int i = 0; i < count; i++) {
         if (state->filter[0] != '\0' &&
@@ -1006,9 +1245,19 @@ static gboolean app_poll(gpointer data) {
     if (changed) {
         app_check_alerts(app);
         page_recorder_capture(app);
-        for (int i = 0; i < PAGE_COUNT; i++) {
-            if (app->pages[i].update != NULL) {
-                app->pages[i].update(app);
+        /* Lazy: only current page needs its list rebuilt; charts redraw
+         * via app_refresh() which already skips off-page widgets. */
+        if (app->pages[app->current_page].update != NULL) {
+            app->pages[app->current_page].update(app);
+        }
+        if (app->config.history_persist) {
+            static guint64 last_persist = 0;
+            if (app->seq - last_persist >= 10) {
+                last_persist = app->seq;
+                history_append(app->view);
+                if ((app->seq % 600) == 0) {
+                    history_rotate_if_large();
+                }
             }
         }
         app_update_header(app);
@@ -1185,6 +1434,24 @@ static void action_palette(GSimpleAction *action, GVariant *parameter,
     app_open_palette(data);
 }
 
+static void action_png(GSimpleAction *action, GVariant *parameter, gpointer data) {
+    (void)action;
+    (void)parameter;
+    app_export_chart_png(data);
+}
+
+static void action_diag(GSimpleAction *action, GVariant *parameter, gpointer data) {
+    (void)action;
+    (void)parameter;
+    app_export_diagnostics(data);
+}
+
+static void action_tray(GSimpleAction *action, GVariant *parameter, gpointer data) {
+    (void)action;
+    (void)parameter;
+    app_tray_minimize(data);
+}
+
 static const GActionEntry app_actions[] = {
     {"settings", action_settings, NULL, NULL, NULL},
     {"shortcuts", action_shortcuts, NULL, NULL, NULL},
@@ -1194,6 +1461,9 @@ static const GActionEntry app_actions[] = {
     {"pause", action_pause, NULL, NULL, NULL},
     {"export-snapshot", action_export, NULL, NULL, NULL},
     {"palette", action_palette, NULL, NULL, NULL},
+    {"export-png", action_png, NULL, NULL, NULL},
+    {"diagnostics", action_diag, NULL, NULL, NULL},
+    {"tray", action_tray, NULL, NULL, NULL},
 };
 
 static void pause_clicked(GtkButton *button, gpointer data) {
@@ -1212,6 +1482,16 @@ static void export_clicked(GtkButton *button, gpointer data) {
     app_export_snapshot(data);
 }
 
+static void png_clicked(GtkButton *button, gpointer data) {
+    (void)button;
+    app_export_chart_png(data);
+}
+
+static void diag_clicked(GtkButton *button, gpointer data) {
+    (void)button;
+    app_export_diagnostics(data);
+}
+
 static gboolean window_close(GtkWindow *window, gpointer data) {
     (void)window;
     App *app = data;
@@ -1223,6 +1503,11 @@ static gboolean window_close(GtkWindow *window, gpointer data) {
     }
     app->config.current_page = (int)app->current_page;
     app_save_config(app);
+    if (app->config.tray_enabled) {
+        gtk_widget_set_visible(app->window, FALSE);
+        app_notify(app, "Minimized to tray — right-click the tray icon for menu");
+        return TRUE; /* prevent destroy */
+    }
     return FALSE;
 }
 
@@ -1295,6 +1580,16 @@ static GtkWidget *build_header(App *app, GtkWindow *window) {
     g_signal_connect(export_button, "clicked", G_CALLBACK(export_clicked), app);
     gtk_box_append(GTK_BOX(end), export_button);
 
+    GtkWidget *png_button = prism_button("PNG", NULL);
+    gtk_widget_set_tooltip_text(png_button, "Export chart PNG");
+    g_signal_connect(png_button, "clicked", G_CALLBACK(png_clicked), app);
+    gtk_box_append(GTK_BOX(end), png_button);
+
+    GtkWidget *diag_button = prism_button("Diag", NULL);
+    gtk_widget_set_tooltip_text(diag_button, "Export diagnostics bundle");
+    g_signal_connect(diag_button, "clicked", G_CALLBACK(diag_clicked), app);
+    gtk_box_append(GTK_BOX(end), diag_button);
+
     app->live_label = GTK_LABEL(prism_label("\xe2\x97\x8f  SYNCING", "live-pill"));
     gtk_box_append(GTK_BOX(end), GTK_WIDGET(app->live_label));
 
@@ -1306,15 +1601,34 @@ static GtkWidget *build_header(App *app, GtkWindow *window) {
     app_track_draw(app, menu_icon);
     gtk_menu_button_set_child(GTK_MENU_BUTTON(menu_button), menu_icon);
     GMenu *menu = g_menu_new();
-    g_menu_append(menu, "Command Palette (Ctrl+K)", "app.palette");
-    g_menu_append(menu, "Pause / Resume (Ctrl+P)", "app.pause");
-    g_menu_append(menu, "Export Snapshot JSON (Ctrl+E)", "app.export-snapshot");
-    g_menu_append(menu, "Settings", "app.settings");
-    g_menu_append(menu, "Appearance", "app.appearance");
-    g_menu_append(menu, "Keyboard Shortcuts", "app.shortcuts");
-    g_menu_append(menu, "About Prism Monitor", "app.about");
-    g_menu_append(menu, "Quit", "app.quit");
+    struct { const char *label; const char *action; const char *icon; } items[] = {
+        {"Command Palette", "app.palette", "system-search"},
+        {"Pause / Resume", "app.pause", "media-playback-pause"},
+        {"Export Snapshot JSON", "app.export-snapshot", "document-export"},
+        {"Export Chart PNG", "app.export-png", "image-x-generic"},
+        {"Diagnostics Bundle", "app.diagnostics", "dialog-information"},
+        {"Minimize to Tray", "app.tray", "application-x-executable"},
+        {"Settings", "app.settings", "preferences-system"},
+        {"Appearance", "app.appearance", "preferences-desktop"},
+        {"Keyboard Shortcuts", "app.shortcuts", "input-keyboard"},
+        {"About Prism Monitor", "app.about", "help-about"},
+        {"Quit", "app.quit", "application-exit"},
+    };
+    for (int i = 0; i < (int)(sizeof(items) / sizeof(items[0])); i++) {
+        GMenuItem *item = g_menu_item_new(items[i].label, items[i].action);
+        GIcon *icon = g_themed_icon_new(items[i].icon);
+        g_menu_item_set_icon(item, icon);
+        g_object_unref(icon);
+        g_menu_append_item(menu, item);
+        g_object_unref(item);
+    }
     gtk_menu_button_set_menu_model(GTK_MENU_BUTTON(menu_button), G_MENU_MODEL(menu));
+    /* Compact popover: no extra outer box, menu only */
+    GtkPopover *popover = gtk_menu_button_get_popover(GTK_MENU_BUTTON(menu_button));
+    if (popover != NULL) {
+        gtk_popover_set_position(popover, GTK_POS_BOTTOM);
+        gtk_popover_set_autohide(popover, TRUE);
+    }
     g_object_unref(menu);
     gtk_box_append(GTK_BOX(end), menu_button);
 
@@ -1336,7 +1650,11 @@ App *app_create(GtkApplication *application) {
     app->anim_widgets = g_ptr_array_new();
     app->sampler = sampler_new(app->config.interval);
     sampler_set_process_interval(app->sampler, app->config.process_interval);
+    sampler_set_plugin_dir(app->sampler, app->config.plugin_dir);
     app->view = snapshot_new();
+    if (app->config.history_persist) {
+        sampler_load_history(app->sampler);
+    }
     app->sidebar_hover_action = 9999;
     app->proc_sort = 0;
     app->proc_sort_desc = 1;
@@ -1469,7 +1787,26 @@ App *app_create(GtkApplication *application) {
     }
     app->tick_source = g_timeout_add((guint)tick_ms, app_tick, app);
 
-    gtk_window_present(GTK_WINDOW(window));
+    if (startup_tray) {
+        app->config.tray_enabled = 1;
+    }
+    if (app->config.autostart) {
+        /* ensure autostart file exists */
+        app_set_autostart(app, TRUE);
+    }
+    if (app->config.tray_enabled) {
+        tray_init(app);
+        app_notify(app, "Tray icon active — right-click it for menu");
+    }
+    if (app->config.start_minimized || startup_minimized) {
+        if (app->config.tray_enabled) {
+            gtk_widget_set_visible(app->window, FALSE);
+        } else {
+            gtk_window_minimize(app->window);
+        }
+    } else {
+        gtk_window_present(GTK_WINDOW(window));
+    }
     return app;
 }
 
@@ -1477,6 +1814,7 @@ void app_destroy(App *app) {
     if (app == NULL) {
         return;
     }
+    tray_shutdown(app);
     if (app->poll_source != 0) {
         g_source_remove(app->poll_source);
     }

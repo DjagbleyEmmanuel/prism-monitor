@@ -117,9 +117,16 @@ int app_chart_window(App *app);
 void app_format_temp(App *app, double celsius, char *buf, size_t len);
 const char *app_font_family(App *app);
 void app_configure_startup(const char *page_name, double interval, gboolean paused);
+void app_configure_startup_full(const char *page_name, double interval,
+                                gboolean paused, gboolean minimized,
+                                gboolean tray);
 void app_set_paused(App *app, gboolean paused);
 gboolean app_is_paused(App *app);
 void app_export_snapshot(App *app);
+void app_export_chart_png(App *app);
+void app_export_diagnostics(App *app);
+void app_set_autostart(App *app, gboolean enabled);
+void app_tray_minimize(App *app);
 void app_open_palette(App *app);
 void app_check_alerts(App *app);
 int app_page_from_name(const char *name);

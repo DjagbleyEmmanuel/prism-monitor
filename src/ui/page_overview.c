@@ -56,12 +56,18 @@ typedef struct {
 
 typedef struct {
     App *app;
+    HoverInfo hover;
+} PluginsState;
+
+typedef struct {
+    App *app;
     GaugeState gauges[6];
     StatState stats[6];
     ChartState cpu_chart;
     ChartState net_chart;
     ChartState disk_chart;
     TopState top;
+    PluginsState plugins;
 } OverviewState;
 
 static void navigate_gauge(GtkGestureClick *gesture, int n_press, double x,
@@ -709,6 +715,38 @@ static void top_draw(GtkDrawingArea *area, cairo_t *cr, int width, int height,
     g_object_unref(layout);
 }
 
+static void plugins_draw(GtkDrawingArea *area, cairo_t *cr, int width, int height,
+                         gpointer data) {
+    (void)area;
+    PluginsState *state = data;
+    App *app = state->app;
+    const Theme *t = &app->theme;
+    PangoLayout *layout = pango_cairo_create_layout(cr);
+    draw_card(cr, t, (Rect){1, 1, width - 2, height - 2}, 16);
+    draw_icon(cr, "system", (Rect){16, 14, 15, 15}, t->accent, 1.7);
+    text_draw(cr, layout, "PLUGINS", 38, 22, 10.5, PANGO_WEIGHT_BOLD, t->dim, TEXT_LEFT);
+    if (app->view->plugin_count == 0) {
+        text_draw(cr, layout,
+                  "No plugins — place executables in ~/.config/prism-monitor/plugins/ "
+                  "(output: name=value unit, e.g. weather=21 C)",
+                  18, height / 2, 9.5, PANGO_WEIGHT_NORMAL, t->faint, TEXT_LEFT);
+    } else {
+        double y = 48;
+        int rows = app->view->plugin_count < 6 ? app->view->plugin_count : 6;
+        for (int i = 0; i < rows; i++) {
+            const PluginInfo *p = &app->view->plugins[i];
+            text_draw_ellipsis(cr, layout, p->name, 18, y, 9.5, PANGO_WEIGHT_BOLD,
+                               t->text, TEXT_LEFT, width / 2);
+            char val[96];
+            snprintf(val, sizeof(val), "%s %s", p->value, p->unit);
+            text_draw(cr, layout, val, width - 18, y, 10, PANGO_WEIGHT_BOLD,
+                      t->accent, TEXT_RIGHT);
+            y += 22;
+        }
+    }
+    g_object_unref(layout);
+}
+
 static GtkWidget *make_gauge(App *app, OverviewState *state, GaugeKind kind,
                              int height) {
     GaugeState *g = &state->gauges[kind];
@@ -782,6 +820,11 @@ GtkWidget *page_overview_create(App *app) {
     prism_grid_put(GTK_GRID(io), net_area, 0, 0, 1, 1);
     prism_grid_put(GTK_GRID(io), disk_area, 1, 0, 1, 1);
     gtk_box_append(GTK_BOX(content), io);
+
+    state->plugins.app = app;
+    GtkWidget *plug_area = prism_area(app, 150, plugins_draw, &state->plugins);
+    prism_hover_attach(plug_area, &state->plugins.hover);
+    gtk_box_append(GTK_BOX(content), plug_area);
 
     g_object_set_data_full(G_OBJECT(content), "overview-state", state, g_free);
     app->pages[PAGE_OVERVIEW].root = content;

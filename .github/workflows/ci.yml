@@ -1,0 +1,35 @@
+name: CI
+
+on:
+  push:
+  pull_request:
+
+jobs:
+  build:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install deps
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y build-essential pkg-config libgtk-4-dev dpkg-dev gettext
+      - name: Build
+        run: make -j$(nproc)
+      - name: Test
+        run: make test
+      - name: Test (ASan/UBSan)
+        run: |
+          make clean
+          make CFLAGS="-O1 -g -fsanitize=address,undefined -std=c11 -D_GNU_SOURCE -Wall -Wextra -Wno-unused-parameter -Isrc $(pkg-config --cflags gtk4)" test
+      - name: Snapshot smoke
+        run: ./bin/prism-monitor --snapshot /tmp/snap.json --duration 2 && python3 -m json.tool /tmp/snap.json > /dev/null
+      - name: Deb smoke
+        run: |
+          make deb
+          dpkg-deb --info dist/*.deb
+          dpkg-deb --contents dist/*.deb
+      - name: Upload deb
+        uses: actions/upload-artifact@v4
+        with:
+          name: prism-monitor-deb
+          path: dist/*.deb

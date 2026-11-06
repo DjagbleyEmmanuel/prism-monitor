@@ -178,6 +178,16 @@ static void switch_changed(GtkSwitch *sw, GParamSpec *pspec, gpointer data) {
         case 10:
             app->config.alerts_enabled = active;
             break;
+        case 11:
+            app->config.tray_enabled = active;
+            break;
+        case 12:
+            app->config.history_persist = active;
+            break;
+        case 13:
+            app->config.autostart = active;
+            app_set_autostart(app, active);
+            break;
         default:
             break;
     }
@@ -319,6 +329,76 @@ static void alert_battery_changed(GtkSpinButton *spin, gpointer data) {
     App *app = data;
     app->config.alert_battery_pct = gtk_spin_button_get_value(spin);
     app_save_config(app);
+}
+
+static gboolean alert_hook_changed(GtkWidget *widget, GdkEvent *event, gpointer data) {
+    (void)event;
+    App *app = data;
+    const char *text = gtk_editable_get_text(GTK_EDITABLE(widget));
+    g_strlcpy(app->config.alert_hook, text != NULL ? text : "",
+              sizeof(app->config.alert_hook));
+    app_save_config(app);
+    return FALSE;
+}
+
+static gboolean plugin_dir_changed(GtkWidget *widget, GdkEvent *event, gpointer data) {
+    (void)event;
+    App *app = data;
+    const char *text = gtk_editable_get_text(GTK_EDITABLE(widget));
+    g_strlcpy(app->config.plugin_dir, text != NULL ? text : "",
+              sizeof(app->config.plugin_dir));
+    sampler_set_plugin_dir(app->sampler, app->config.plugin_dir);
+    sampler_invalidate_aux(app->sampler);
+    app_save_config(app);
+    return FALSE;
+}
+
+static void page_vis_changed(GtkSwitch *sw, GParamSpec *pspec, gpointer data) {
+    (void)pspec;
+    App *app = data;
+    int pid = GPOINTER_TO_INT(g_object_get_data(G_OBJECT(sw), "page-id"));
+    gboolean active = gtk_switch_get_active(sw);
+    if (active) {
+        app->config.page_mask |= (1u << pid);
+    } else {
+        app->config.page_mask &= ~(1u << pid);
+    }
+    if (app->config.page_mask == 0) {
+        app->config.page_mask = (1u << pid);
+        gtk_switch_set_active(sw, TRUE);
+    }
+    app_save_config(app);
+    app_notify(app, "Dashboard updated (applies immediately to sidebar)");
+    /* Force sidebar redraw by navigating to current page */
+    app_navigate(app, app->current_page);
+}
+
+static void page_up_clicked(GtkButton *button, gpointer data) {
+    App *app = data;
+    int pos = GPOINTER_TO_INT(g_object_get_data(G_OBJECT(button), "order-pos"));
+    if (pos <= 0) {
+        return;
+    }
+    int tmp = app->config.page_order[pos];
+    app->config.page_order[pos] = app->config.page_order[pos - 1];
+    app->config.page_order[pos - 1] = tmp;
+    app_save_config(app);
+    app_notify(app, "Order saved — reopen Settings to see new order");
+    app_navigate(app, app->current_page);
+}
+
+static void page_down_clicked(GtkButton *button, gpointer data) {
+    App *app = data;
+    int pos = GPOINTER_TO_INT(g_object_get_data(G_OBJECT(button), "order-pos"));
+    if (pos >= 17) {
+        return;
+    }
+    int tmp = app->config.page_order[pos];
+    app->config.page_order[pos] = app->config.page_order[pos + 1];
+    app->config.page_order[pos + 1] = tmp;
+    app_save_config(app);
+    app_notify(app, "Order saved — reopen Settings to see new order");
+    app_navigate(app, app->current_page);
 }
 
 static void reset_confirmed(GtkButton *button, gpointer data) {
@@ -524,7 +604,84 @@ void app_open_settings(App *app) {
                    setting_row(section("Battery low limit (%)", "Warn at or below this charge."),
                                make_spin(5, 60, 1, app->config.alert_battery_pct, 0,
                                          110, G_CALLBACK(alert_battery_changed), app)));
+    {
+        GtkWidget *hook = gtk_entry_new();
+        gtk_entry_set_placeholder_text(GTK_ENTRY(hook),
+                                       "e.g. notify-send \"Prism\" \"$PRISM_ALERT_MSG\"");
+        gtk_editable_set_text(GTK_EDITABLE(hook), app->config.alert_hook);
+        gtk_widget_set_size_request(hook, 280, -1);
+        g_signal_connect(hook, "activate", G_CALLBACK(alert_hook_changed), app);
+        g_signal_connect(hook, "focus-out-event", G_CALLBACK(alert_hook_changed), app);
+        gtk_box_append(GTK_BOX(alerts),
+                       setting_row(section("Alert hook command", "Run on alert (env: PRISM_ALERT_MSG). Log in alerts.log."),
+                                   hook));
+    }
     gtk_box_append(GTK_BOX(content), alerts);
+
+    /* Dashboard: page visibility + order */
+    {
+        GtkWidget *dash = gtk_box_new(GTK_ORIENTATION_VERTICAL, 8);
+        gtk_widget_add_css_class(dash, "settings-card");
+        gtk_box_append(GTK_BOX(dash), section("Dashboard",
+            "Show/hide pages in sidebar. Order is saved and applied on next launch; use ↑/↓ to reorder."));
+        static const char *dash_names[18] = {
+            "Overview", "CPU", "Memory", "GPU", "Storage", "Network", "Processes",
+            "Sensors", "System", "Services", "Startup", "Connections",
+            "Installed Apps", "Drivers", "Disk Space", "Benchmarks",
+            "Power & Frequency", "Flight Recorder"
+        };
+        for (int o = 0; o < 18; o++) {
+            int pid = app->config.page_order[o];
+            GtkWidget *row = gtk_box_new(GTK_ORIENTATION_HORIZONTAL, 6);
+            GtkWidget *sw = gtk_switch_new();
+            gtk_switch_set_active(GTK_SWITCH(sw),
+                                  (app->config.page_mask & (1u << pid)) != 0);
+            g_object_set_data(G_OBJECT(sw), "page-id", GINT_TO_POINTER(pid));
+            g_signal_connect(sw, "notify::active", G_CALLBACK(page_vis_changed), app);
+            GtkWidget *lbl = prism_label(dash_names[pid], "dim");
+            gtk_widget_set_hexpand(lbl, TRUE);
+            GtkWidget *up = prism_button("↑", NULL);
+            GtkWidget *down = prism_button("↓", NULL);
+            g_object_set_data(G_OBJECT(up), "order-pos", GINT_TO_POINTER(o));
+            g_object_set_data(G_OBJECT(down), "order-pos", GINT_TO_POINTER(o));
+            g_signal_connect(up, "clicked", G_CALLBACK(page_up_clicked), app);
+            g_signal_connect(down, "clicked", G_CALLBACK(page_down_clicked), app);
+            gtk_box_append(GTK_BOX(row), sw);
+            gtk_box_append(GTK_BOX(row), lbl);
+            gtk_box_append(GTK_BOX(row), up);
+            gtk_box_append(GTK_BOX(row), down);
+            gtk_box_append(GTK_BOX(dash), row);
+        }
+        gtk_box_append(GTK_BOX(content), dash);
+    }
+
+    /* Tray / autostart / history / plugins */
+    {
+        GtkWidget *tray = gtk_box_new(GTK_ORIENTATION_VERTICAL, 12);
+        gtk_widget_add_css_class(tray, "settings-card");
+        gtk_box_append(GTK_BOX(tray), section("Tray, History & Plugins",
+            "Background mode, persistent charts and external metrics."));
+        gtk_box_append(GTK_BOX(tray),
+                       setting_row(section("Tray mode", "Close minimizes to background instead of quitting."),
+                                   make_switch(app, 11, app->config.tray_enabled)));
+        gtk_box_append(GTK_BOX(tray),
+                       setting_row(section("Autostart at login", "Create ~/.config/autostart/prism-monitor.desktop."),
+                                   make_switch(app, 13, app->config.autostart)));
+        gtk_box_append(GTK_BOX(tray),
+                       setting_row(section("Persist history", "Save charts to history.tsv and restore on launch."),
+                                   make_switch(app, 12, app->config.history_persist)));
+        GtkWidget *pdir = gtk_entry_new();
+        gtk_entry_set_placeholder_text(GTK_ENTRY(pdir),
+                                       "~/.config/prism-monitor/plugins (default)");
+        gtk_editable_set_text(GTK_EDITABLE(pdir), app->config.plugin_dir);
+        gtk_widget_set_size_request(pdir, 280, -1);
+        g_signal_connect(pdir, "activate", G_CALLBACK(plugin_dir_changed), app);
+        g_signal_connect(pdir, "focus-out-event", G_CALLBACK(plugin_dir_changed), app);
+        gtk_box_append(GTK_BOX(tray),
+                       setting_row(section("Plugin directory", "Executables outputting name=value unit."),
+                                   pdir));
+        gtk_box_append(GTK_BOX(content), tray);
+    }
 
     GtkWidget *graphics = gtk_box_new(GTK_ORIENTATION_VERTICAL, 12);
     gtk_widget_add_css_class(graphics, "settings-card");

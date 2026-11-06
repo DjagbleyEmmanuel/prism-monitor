@@ -65,6 +65,31 @@ static void service_detail(ServicesPage *page, int index) {
         snprintf(pid, sizeof(pid), "%d", service->main_pid);
         manage_detail_row(ui, "Main PID", pid);
     }
+    {
+        char *log = service_journal(service->name, 30);
+        if (log != NULL && log[0] != '\0') {
+            /* Show last 8 lines as note */
+            char *copy = g_strdup(log);
+            /* keep last lines */
+            char **lines = g_strsplit(copy, "\n", -1);
+            int n = g_strv_length(lines);
+            GString *tail = g_string_new("");
+            for (int i = n > 8 ? n - 8 : 0; i < n; i++) {
+                if (lines[i][0] != '\0') {
+                    g_string_append_printf(tail, "%s\n", lines[i]);
+                }
+            }
+            manage_detail_heading(ui, "Journal (last lines)");
+            GtkWidget *lbl = prism_label(tail->str, "detail-note");
+            gtk_label_set_wrap(GTK_LABEL(lbl), TRUE);
+            gtk_label_set_selectable(GTK_LABEL(lbl), TRUE);
+            gtk_box_append(GTK_BOX(ui->detail), lbl);
+            g_string_free(tail, TRUE);
+            g_strfreev(lines);
+            g_free(copy);
+        }
+        g_free(log);
+    }
     manage_detail_note(ui, "Start, stop, restart and boot-time activation are applied "
                            "through systemd. Administrative units may ask for "
                            "authentication through the desktop policy agent.");

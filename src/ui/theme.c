@@ -335,10 +335,15 @@ char *theme_build_css(const Theme *t, bool compact, const char *font_family,
     g_string_append_printf(css,
         "menubutton > button:hover { background: %s; }\n", card);
     g_string_append_printf(css,
-        "popover > contents, menu, .menu { background: %s; color: %s;"
+        "popover { background: transparent; border: none; box-shadow: none; padding: 0; }\n");
+    g_string_append_printf(css,
+        "popover > contents { background: transparent; border: none; padding: 0; box-shadow: none; }\n");
+    g_string_append_printf(css,
+        "menu, .menu { background: %s; color: %s;"
         " border: 1px solid %s; border-radius: 12px; padding: 6px;"
         " box-shadow: 0 18px 40px rgba(0,0,0,0.45); }\n", panel, text, border);
     g_string_append_printf(css, "menuitem { padding: 7px 12px; border-radius: 7px; color: %s; }\n", text);
+    /* menuitem icons are spaced by GTK internally */
     g_string_append_printf(css, "menuitem:hover { background: %s; }\n", card);
     g_string_append_printf(css,
         ".live-pill { background: rgba(%d,%d,%d,0.12); color: %s;"

@@ -27,5 +27,8 @@ int alerts_check(AlertState *state, const Snapshot *snap, int enabled,
 
 /* Highest used mount percentage, or 0 when no mounts. */
 double alerts_worst_disk_pct(const Snapshot *snap);
+const char *alerts_log_path(void);
+void alerts_log(const char *message);
+void alerts_run_hook(const char *hook_cmd, int fired_mask, const char *message);
 
 #endif

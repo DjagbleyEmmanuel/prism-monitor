@@ -1,5 +1,6 @@
 #include "core/common.h"
 #include "core/export.h"
+#include "core/i18n.h"
 #include "core/history.h"
 #include "core/sampler.h"
 #include "ui/app.h"
@@ -9,6 +10,10 @@
 #include <stdlib.h>
 #include <string.h>
 #include <time.h>
+#include <unistd.h>
+#include <sys/socket.h>
+#include <netinet/in.h>
+#include <arpa/inet.h>
 
 static void print_usage(const char *prog) {
     printf("Prism Monitor %s\n", PRISM_VERSION);
@@ -28,6 +33,11 @@ static void print_usage(const char *prog) {
     printf("                         FILE \"-\" or omitted = stdout. Example:\n");
     printf("                         prism-monitor --snapshot /tmp/snap.json --duration 2\n");
     printf("  --record FILE          Record TSV telemetry for --duration seconds and exit\n");
+    printf("  --daemon               Fork to background, write history + pidfile, exit\n");
+    printf("  --exporter PORT        Serve Prometheus metrics on localhost:PORT (--duration secs, 0=forever)\n");
+    printf("  --tray                 Start in tray mode (close minimizes)\n");
+    printf("  --minimized            Start minimized\n");
+    printf("  --diagnostics          Write diagnostics bundle and exit\n");
     printf("\n");
     printf("Shortcuts in the GUI: Ctrl+K palette, Ctrl+P pause/resume,\n");
     printf("Ctrl+E export snapshot JSON, Ctrl+1..9 pages, Ctrl+B sidebar.\n");
@@ -122,6 +132,146 @@ static int run_headless_record(const char *path, double interval,
     return 0;
 }
 
+static int run_daemon(double interval) {
+    if (interval <= 0) {
+        interval = 1.0;
+    }
+    pid_t pid = fork();
+    if (pid < 0) {
+        return 1;
+    }
+    if (pid > 0) {
+        fprintf(stderr, "prism-monitor: daemon pid %d\n", (int)pid);
+        return 0;
+    }
+    if (setsid() < 0) {
+        _exit(1);
+    }
+    /* Redirect stdio to log */
+    char *dir = g_build_filename(g_get_user_data_dir(), "prism-monitor", NULL);
+    g_mkdir_with_parents(dir, 0700);
+    char *logpath = g_build_filename(dir, "daemon.log", NULL);
+    FILE *log = freopen(logpath, "a", "w");
+    (void)log;
+    char *pidpath = g_build_filename(dir, "daemon.pid", NULL);
+    FILE *pf = fopen(pidpath, "w");
+    if (pf != NULL) {
+        fprintf(pf, "%d\n", (int)getpid());
+        fclose(pf);
+    }
+    g_free(pidpath);
+    g_free(logpath);
+    g_free(dir);
+    Sampler *sampler = sampler_new(interval);
+    sampler_load_history(sampler);
+    sampler_start(sampler);
+    Snapshot *snap = snapshot_new();
+    History hist;
+    history_clear(&hist);
+    guint64 seq = 0;
+    while (TRUE) {
+        if (sampler_copy(sampler, snap, &hist, &seq)) {
+            history_append(snap);
+        }
+        g_usleep(1000 * 1000);
+    }
+    return 0;
+}
+
+static int run_exporter(int port, double interval, double duration) {
+    if (port <= 0 || port > 65535) {
+        fprintf(stderr, "prism-monitor: --exporter needs port 1-65535\n");
+        return 1;
+    }
+    if (interval <= 0) {
+        interval = 5.0;
+    }
+    int listener = socket(AF_INET, SOCK_STREAM, 0);
+    if (listener < 0) {
+        return 1;
+    }
+    int opt = 1;
+    setsockopt(listener, SOL_SOCKET, SO_REUSEADDR, &opt, sizeof(opt));
+    struct sockaddr_in addr;
+    memset(&addr, 0, sizeof(addr));
+    addr.sin_family = AF_INET;
+    addr.sin_addr.s_addr = htonl(INADDR_LOOPBACK);
+    addr.sin_port = htons((uint16_t)port);
+    if (bind(listener, (struct sockaddr *)&addr, sizeof(addr)) < 0) {
+        perror("bind");
+        close(listener);
+        return 1;
+    }
+    if (listen(listener, 5) < 0) {
+        close(listener);
+        return 1;
+    }
+    fprintf(stderr, "prism-monitor: Prometheus exporter on 127.0.0.1:%d\n", port);
+    Sampler *sampler = sampler_new(interval);
+    sampler_start(sampler);
+    Snapshot *snap = snapshot_new();
+    History hist;
+    history_clear(&hist);
+    gint64 deadline = duration > 0
+        ? g_get_monotonic_time() + (gint64)(duration * G_USEC_PER_SEC) : 0;
+    while (TRUE) {
+        if (deadline > 0 && g_get_monotonic_time() > deadline) {
+            break;
+        }
+        struct sockaddr_in cli;
+        socklen_t clen = sizeof(cli);
+        int fd = accept(listener, (struct sockaddr *)&cli, &clen);
+        if (fd < 0) {
+            continue;
+        }
+        sampler_copy(sampler, snap, &hist, NULL);
+        char *metrics = export_snapshot_prometheus(snap);
+        char header[256];
+        snprintf(header, sizeof(header),
+                 "HTTP/1.1 200 OK\r\nContent-Type: text/plain; version=0.0.4\r\n"
+                 "Content-Length: %zu\r\nConnection: close\r\n\r\n",
+                 strlen(metrics));
+        send(fd, header, strlen(header), 0);
+        send(fd, metrics, strlen(metrics), 0);
+        g_free(metrics);
+        close(fd);
+    }
+    close(listener);
+    snapshot_free(snap);
+    sampler_free(sampler);
+    return 0;
+}
+
+static int run_diagnostics(double interval) {
+    if (interval <= 0) {
+        interval = 1.0;
+    }
+    Sampler *sampler = sampler_new(interval);
+    sampler_start(sampler);
+    Snapshot *snap = snapshot_new();
+    History hist;
+    history_clear(&hist);
+    guint64 seq = 0;
+    gint64 deadline = g_get_monotonic_time() + 2 * G_USEC_PER_SEC;
+    while (g_get_monotonic_time() < deadline) {
+        sampler_copy(sampler, snap, &hist, &seq);
+        g_usleep(100 * 1000);
+    }
+    sampler_copy(sampler, snap, &hist, NULL);
+    /* config path via a dummy load */
+    char *bundle = export_diagnostics_bundle(snap, &hist, NULL);
+    if (bundle != NULL) {
+        printf("%s\n", bundle);
+        g_free(bundle);
+        snapshot_free(snap);
+        sampler_free(sampler);
+        return 0;
+    }
+    snapshot_free(snap);
+    sampler_free(sampler);
+    return 1;
+}
+
 static void prism_activate(GtkApplication *application, gpointer data) {
     (void)data;
     if (g_object_get_data(G_OBJECT(application), "prism-app") != NULL) {
@@ -138,6 +288,7 @@ static void prism_shutdown(GtkApplication *application, gpointer data) {
 }
 
 int main(int argc, char **argv) {
+    prism_i18n_init();
     g_set_application_name(PRISM_APP_NAME);
 
     const char *prog = argc > 0 ? argv[0] : "prism-monitor";
@@ -148,6 +299,11 @@ int main(int argc, char **argv) {
     char *opt_record = NULL;
     gboolean opt_paused = FALSE;
     gboolean opt_snapshot_set = FALSE;
+    gboolean opt_daemon = FALSE;
+    gboolean opt_diagnostics = FALSE;
+    gboolean opt_tray = FALSE;
+    gboolean opt_minimized = FALSE;
+    int opt_exporter = 0;
 
     char **gui_argv = g_new0(char *, argc + 1);
     int gui_argc = 0;
@@ -194,6 +350,19 @@ int main(int argc, char **argv) {
         } else if (strcmp(arg, "--paused") == 0 ||
                    strcmp(arg, "--start-paused") == 0) {
             opt_paused = TRUE;
+        } else if (strcmp(arg, "--daemon") == 0) {
+            opt_daemon = TRUE;
+        } else if (strcmp(arg, "--diagnostics") == 0) {
+            opt_diagnostics = TRUE;
+        } else if (strcmp(arg, "--tray") == 0) {
+            opt_tray = TRUE;
+        } else if (strcmp(arg, "--minimized") == 0 ||
+                   strcmp(arg, "--start-minimized") == 0) {
+            opt_minimized = TRUE;
+        } else if (strncmp(arg, "--exporter=", 11) == 0) {
+            opt_exporter = atoi(arg + 11);
+        } else if (strcmp(arg, "--exporter") == 0 && i + 1 < argc) {
+            opt_exporter = atoi(argv[++i]);
         } else {
             gui_argv[gui_argc++] = argv[i];
         }
@@ -218,8 +387,33 @@ int main(int argc, char **argv) {
         g_free(gui_argv);
         return status;
     }
+    if (opt_daemon) {
+        int status = run_daemon(opt_interval);
+        g_free(opt_page);
+        g_free(opt_snapshot);
+        g_free(opt_record);
+        g_free(gui_argv);
+        return status;
+    }
+    if (opt_exporter > 0) {
+        int status = run_exporter(opt_exporter, opt_interval, opt_duration);
+        g_free(opt_page);
+        g_free(opt_snapshot);
+        g_free(opt_record);
+        g_free(gui_argv);
+        return status;
+    }
+    if (opt_diagnostics) {
+        int status = run_diagnostics(opt_interval);
+        g_free(opt_page);
+        g_free(opt_snapshot);
+        g_free(opt_record);
+        g_free(gui_argv);
+        return status;
+    }
 
-    app_configure_startup(opt_page, opt_interval, opt_paused);
+    app_configure_startup_full(opt_page, opt_interval, opt_paused,
+                               opt_minimized, opt_tray);
 
     GtkApplication *application = gtk_application_new(PRISM_APP_ID,
                                                       G_APPLICATION_DEFAULT_FLAGS);

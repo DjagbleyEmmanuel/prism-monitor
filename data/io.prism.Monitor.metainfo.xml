@@ -26,6 +26,16 @@
   </developer>
   <content_rating type="oars-1.1"/>
   <releases>
+    <release version="1.3.0" date="2026-11-06">
+      <description>
+        <p>Process I/O and tree view, persistent history, chart PNG and recorder
+          replay, SMART/NVMe health, AMD/Intel GPU fan/power, Wi-Fi and ping,
+          CPU governor/EPP/turbo controls, journal viewer, connection kill,
+          disk trash/delete and duplicate finder, tray/autostart, custom
+          dashboard (show/hide/reorder pages), plugins, alert hooks and log,
+          diagnostics bundle, daemon and Prometheus exporter, Flatpak manifest.</p>
+      </description>
+    </release>
     <release version="1.2.0" date="2026-11-05">
       <description>
         <p>Command line with headless JSON snapshot and TSV recording, pause/resume

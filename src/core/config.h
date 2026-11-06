@@ -34,6 +34,14 @@ typedef struct {
     int window_width;
     int window_height;
     int current_page;
+    char alert_hook[256];
+    int tray_enabled;
+    int start_minimized;
+    int autostart;
+    int history_persist;
+    unsigned int page_mask;
+    int page_order[18];
+    char plugin_dir[256];
 } Config;
 
 void config_defaults(Config *config);

@@ -19,6 +19,7 @@
 #define PRISM_MAX_APPS 512
 #define PRISM_MAX_DRIVERS 256
 #define PRISM_MAX_RECORDINGS 64
+#define PRISM_MAX_PLUGINS 16
 
 typedef struct {
     double user;
@@ -94,6 +95,8 @@ typedef struct {
     double power_limit_w;
     double clock_core_mhz;
     double clock_mem_mhz;
+    double fan_pct;
+    double fan_rpm;
 } GpuInfo;
 
 typedef struct {
@@ -106,6 +109,12 @@ typedef struct {
     unsigned long long write_total;
     double temp_c;
     int rotational;
+    int smart_available;
+    double health_pct;
+    double wear_pct;
+    unsigned long long media_errors;
+    double power_on_hours;
+    double data_written_tb;
 } DiskInfo;
 
 typedef struct {
@@ -131,6 +140,9 @@ typedef struct {
     unsigned long long rx_total;
     unsigned long long tx_total;
     int mtu;
+    double wifi_signal_dbm;
+    double wifi_freq_mhz;
+    double wifi_link_mbps;
 } NicInfo;
 
 enum {
@@ -179,6 +191,11 @@ typedef struct {
     int nice;
     unsigned long long start_ticks;
     int kernel_thread;
+    unsigned long long io_read_bytes;
+    unsigned long long io_write_bytes;
+    double io_read_bps;
+    double io_write_bps;
+    int tree_depth;
 } ProcInfo;
 
 typedef struct {
@@ -197,7 +214,15 @@ typedef struct {
     int priority;
     double cpu_pct;
     unsigned long long start_ticks;
+    unsigned long long io_read_bytes;
+    unsigned long long io_write_bytes;
 } ProcDetails;
+
+typedef struct {
+    char name[64];
+    char value[64];
+    char unit[16];
+} PluginInfo;
 
 typedef struct {
     char name[32];
@@ -291,6 +316,9 @@ typedef struct {
     int connection_count;
     ConnectionInfo connections[PRISM_MAX_CONNECTIONS];
     TcpInfo tcp;
+    double ping_ms;
+    int plugin_count;
+    PluginInfo plugins[PRISM_MAX_PLUGINS];
 } Snapshot;
 
 typedef struct {

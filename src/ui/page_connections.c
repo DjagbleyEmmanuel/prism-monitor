@@ -94,6 +94,25 @@ static void connection_copy_remote(GtkButton *button, gpointer data) {
     }
 }
 
+static void connection_kill_clicked(GtkButton *button, gpointer data) {
+    (void)button;
+    ConnectionsPage *page = data;
+    if (page->selected < 0 || page->selected >= page->app->view->connection_count) {
+        return;
+    }
+    const ConnectionInfo *conn = &page->app->view->connections[page->selected];
+    if (conn->remote[0] == '\0' || strcmp(conn->remote, "0.0.0.0:0") == 0) {
+        app_notify(page->app, "No remote endpoint to kill");
+        return;
+    }
+    if (connection_kill(conn) == 0) {
+        app_notify(page->app, "Kill requested for %s", conn->remote);
+    } else {
+        app_notify(page->app, "Cannot kill (need root/cap?)");
+    }
+    sampler_invalidate_aux(page->app->sampler);
+}
+
 static void connection_open_process(GtkButton *button, gpointer data) {
     (void)button;
     ConnectionsPage *page = data;
@@ -144,10 +163,13 @@ static void connection_detail(ConnectionsPage *page, int index) {
     GtkWidget *actions = manage_detail_actions(ui);
     GtkWidget *local = prism_button("Copy local", NULL);
     GtkWidget *remote = prism_button("Copy remote", NULL);
+    GtkWidget *kill = prism_button("Kill connection", "danger");
     gtk_box_append(GTK_BOX(actions), local);
     gtk_box_append(GTK_BOX(actions), remote);
+    gtk_box_append(GTK_BOX(actions), kill);
     g_signal_connect(local, "clicked", G_CALLBACK(connection_copy_local), page);
     g_signal_connect(remote, "clicked", G_CALLBACK(connection_copy_remote), page);
+    g_signal_connect(kill, "clicked", G_CALLBACK(connection_kill_clicked), page);
     if (conn->pid > 0) {
         GtkWidget *open = prism_button("Open process", NULL);
         gtk_box_append(GTK_BOX(actions), open);

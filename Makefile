@@ -31,9 +31,14 @@ DEB_MAINTAINER := Priderock-Elohimmanuel <priderock-elohimmanuel@users.noreply.g
 DEB_DEPENDS := libgtk-4-1 (>= 4.10.0), libpango-1.0-0, libcairo2, libc6 (>= 2.34)
 DIST := dist
 
-.PHONY: all run debug clean test install uninstall deb
+.PHONY: all run debug clean test install uninstall deb i18n
 
 all: $(BIN)/$(APP)
+
+i18n:
+	xgettext --keyword=_ --from-code=UTF-8 -f po/POTFILES.in -o po/prism-monitor.pot
+	@for f in po/*.po; do msgmerge --update $$f po/prism-monitor.pot; done
+	@echo "Updated po/prism-monitor.pot"
 
 $(BIN)/$(APP): $(APP_OBJ)
 	@mkdir -p $(dir $@)
@@ -52,7 +57,7 @@ debug:
 test: $(BUILD)/tests/test_core
 	./$(BUILD)/tests/test_core
 
-$(BUILD)/tests/test_core: tests/test_core.c src/core/parse.c src/core/format.c src/core/history.c src/core/alerts.c src/core/export.c
+$(BUILD)/tests/test_core: tests/test_core.c src/core/parse.c src/core/format.c src/core/history.c src/core/alerts.c src/core/export.c src/core/plugins.c src/sys/proc.c src/sys/disk.c src/sys/net.c src/core/common.c
 	@mkdir -p $(dir $@)
 	$(CC) $(CFLAGS) $^ $(LDLIBS) -o $@
 

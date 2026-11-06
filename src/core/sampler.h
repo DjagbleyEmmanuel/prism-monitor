@@ -19,5 +19,7 @@ void sampler_set_process_interval(Sampler *sampler, int seconds);
 void sampler_invalidate_aux(Sampler *sampler);
 void sampler_set_paused(Sampler *sampler, gboolean paused);
 gboolean sampler_is_paused(Sampler *sampler);
+void sampler_set_plugin_dir(Sampler *sampler, const char *dir);
+int sampler_load_history(Sampler *sampler);
 
 #endif

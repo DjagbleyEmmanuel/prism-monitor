@@ -257,9 +257,17 @@ static void list_draw(GtkDrawingArea *area, cairo_t *cr, int width, int height,
                           gpu->vram_used_mb / gpu->vram_total_mb * 100.0,
                           color, 2);
         }
-        char right[96];
-        snprintf(right, sizeof(right), "%.0f%%  \xc2\xb7  %.0f\xc2\xb0" "C  \xc2\xb7  %.0f W",
-                 gpu->util_pct, gpu->temp_c, gpu->power_w);
+        char right[128];
+        if (gpu->fan_rpm > 0) {
+            snprintf(right, sizeof(right), "%.0f%%  \xc2\xb7  %.0f\xc2\xb0" "C  \xc2\xb7  %.0f W  \xc2\xb7  fan %.0f%% (%.0f rpm)",
+                     gpu->util_pct, gpu->temp_c, gpu->power_w, gpu->fan_pct, gpu->fan_rpm);
+        } else if (gpu->fan_pct > 0) {
+            snprintf(right, sizeof(right), "%.0f%%  \xc2\xb7  %.0f\xc2\xb0" "C  \xc2\xb7  %.0f W  \xc2\xb7  fan %.0f%%",
+                     gpu->util_pct, gpu->temp_c, gpu->power_w, gpu->fan_pct);
+        } else {
+            snprintf(right, sizeof(right), "%.0f%%  \xc2\xb7  %.0f\xc2\xb0" "C  \xc2\xb7  %.0f W",
+                     gpu->util_pct, gpu->temp_c, gpu->power_w);
+        }
         text_draw(cr, layout, right, width - 18, y + 2, 9, PANGO_WEIGHT_BOLD,
                   color, TEXT_RIGHT);
         y += 74;
