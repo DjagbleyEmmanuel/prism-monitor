@@ -46,6 +46,13 @@ void config_defaults(Config *config) {
         config->page_order[i] = i;
     }
     config->plugin_dir[0] = '\0';
+    config->island_enabled = 0;
+    config->island_dock = 0;
+    config->island_metrics = 1 | 2 | 4 | 8 | 64;
+    config->island_cycle_s = 4.0;
+    config->island_x = -1;
+    config->island_y = -1;
+    config->island_expanded = 0;
 }
 
 const char *config_path(void) {
@@ -137,6 +144,18 @@ void config_load(Config *config) {
                                        config->window_height);
     config->current_page = config_int(keyfile, "window", "page",
                                       config->current_page);
+    config->island_enabled = config_bool(keyfile, "island", "enabled",
+                                         config->island_enabled);
+    config->island_dock = config_int(keyfile, "island", "dock",
+                                     config->island_dock);
+    config->island_metrics = config_int(keyfile, "island", "metrics",
+                                        config->island_metrics);
+    config->island_cycle_s = config_double(keyfile, "island", "cycle_s",
+                                           config->island_cycle_s);
+    config->island_x = config_int(keyfile, "island", "x", config->island_x);
+    config->island_y = config_int(keyfile, "island", "y", config->island_y);
+    config->island_expanded = config_bool(keyfile, "island", "expanded",
+                                          config->island_expanded);
     {
         char *hook = g_key_file_get_string(keyfile, "alerts", "hook", NULL);
         if (hook != NULL && hook[0] != '\0') {
@@ -219,6 +238,16 @@ void config_load(Config *config) {
         config->page_mask = (1u << 18) - 1;
     }
     config->page_mask &= (1u << 18) - 1;
+    config->island_dock = CLAMP(config->island_dock, 0, 4);
+    config->island_metrics &= (1 | 2 | 4 | 8 | 16 | 32 | 64 | 128 | 256 | 512 | 1024);
+    if (config->island_metrics == 0) {
+        config->island_metrics = 64;
+    }
+    config->island_cycle_s = CLAMP(config->island_cycle_s, 1.0, 30.0);
+    if (config->island_x != -1) {
+        config->island_x = CLAMP(config->island_x, -2000, 8000);
+        config->island_y = CLAMP(config->island_y, -2000, 8000);
+    }
     /* validate page_order is a permutation-ish list; fill missing */
     {
         int seen[18] = {0};
@@ -305,6 +334,13 @@ void config_save(const Config *config) {
         g_key_file_set_string(keyfile, "dashboard", "page_order", order);
     }
     g_key_file_set_string(keyfile, "plugins", "dir", config->plugin_dir);
+    g_key_file_set_boolean(keyfile, "island", "enabled", config->island_enabled);
+    g_key_file_set_integer(keyfile, "island", "dock", config->island_dock);
+    g_key_file_set_integer(keyfile, "island", "metrics", config->island_metrics);
+    g_key_file_set_double(keyfile, "island", "cycle_s", config->island_cycle_s);
+    g_key_file_set_integer(keyfile, "island", "x", config->island_x);
+    g_key_file_set_integer(keyfile, "island", "y", config->island_y);
+    g_key_file_set_boolean(keyfile, "island", "expanded", config->island_expanded);
     char *directory = g_path_get_dirname(config_path());
     g_mkdir_with_parents(directory, 0700);
     g_free(directory);

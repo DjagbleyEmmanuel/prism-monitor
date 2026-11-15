@@ -6,6 +6,7 @@
 #include "ui/icons.h"
 #include "ui/manage.h"
 #include "ui/pages.h"
+#include "ui/island.h"
 #include "ui/widgets.h"
 
 #include <stdio.h>
@@ -188,7 +189,30 @@ static void switch_changed(GtkSwitch *sw, GParamSpec *pspec, gpointer data) {
             app->config.autostart = active;
             app_set_autostart(app, active);
             break;
+        case 14:
+            app->config.island_enabled = active;
+            if (active) {
+                if (app->island == NULL) {
+                    app_island_refresh_config(app);
+                }
+                island_create(app);
+            } else if (app->island != NULL) {
+                island_show(app, FALSE);
+            }
+            break;
         default:
+            if (which >= 100 && which < 200) {
+                int bit = 1 << (which - 100);
+                if (active) {
+                    app->config.island_metrics |= bit;
+                } else {
+                    app->config.island_metrics &= ~bit;
+                }
+                if (app->config.island_metrics == 0) {
+                    app->config.island_metrics = 64;
+                }
+                island_refresh_metrics(app);
+            }
             break;
     }
     app_save_config(app);
@@ -385,6 +409,27 @@ static void page_up_clicked(GtkButton *button, gpointer data) {
     app_save_config(app);
     app_notify(app, "Order saved — reopen Settings to see new order");
     app_navigate(app, app->current_page);
+}
+
+static void page_down_clicked(GtkButton *button, gpointer data);
+static void island_dock_changed(GObject *object, GParamSpec *pspec, gpointer data) {
+    (void)pspec;
+    App *app = data;
+    app->config.island_dock = (int)gtk_drop_down_get_selected(GTK_DROP_DOWN(object));
+    if (app->island == NULL && app->config.island_enabled) {
+        app_island_refresh_config(app);
+        island_create(app);
+    } else {
+        app_island_refresh_config(app);
+    }
+    app_save_config(app);
+    app_notify(app, "Island dock updated");
+}
+
+static void island_cycle_changed(GtkSpinButton *spin, gpointer data) {
+    App *app = data;
+    app->config.island_cycle_s = gtk_spin_button_get_value(spin);
+    app_save_config(app);
 }
 
 static void page_down_clicked(GtkButton *button, gpointer data) {
@@ -681,6 +726,42 @@ void app_open_settings(App *app) {
                        setting_row(section("Plugin directory", "Executables outputting name=value unit."),
                                    pdir));
         gtk_box_append(GTK_BOX(content), tray);
+    }
+
+    /* Island — Dynamic Island */
+    {
+        GtkWidget *isl = gtk_box_new(GTK_ORIENTATION_VERTICAL, 12);
+        gtk_widget_add_css_class(isl, "settings-card");
+        gtk_box_append(GTK_BOX(isl), section("Island — Dynamic Island",
+            "Floating pill that shows GPU, VRAM, temperatures and more. Click body to cycle, chevron to expand, drag to dock on any edge. Hover to reveal when docked."));
+        gtk_box_append(GTK_BOX(isl),
+                       setting_row(section("Show island", "Floating Dynamic Island pill on the desktop."),
+                                   make_switch(app, 14, app->config.island_enabled)));
+        const char *docks[] = {"Floating (drag)", "Top edge", "Right edge",
+                               "Bottom edge", "Left edge", NULL};
+        gtk_box_append(GTK_BOX(isl),
+                       setting_row(section("Dock side", "Edge the island sticks to (mouse out reveals — popout on hover)."),
+                                   make_dropdown(docks, app->config.island_dock,
+                                                 G_CALLBACK(island_dock_changed), app)));
+        GtkWidget *cycle = make_spin(1, 30, 0.5, app->config.island_cycle_s, 1,
+                                     110, G_CALLBACK(island_cycle_changed), app);
+        gtk_box_append(GTK_BOX(isl),
+                       setting_row(section("Cycle seconds", "Seconds between rotating metrics on the pill."),
+                                   cycle));
+        struct { const char *label; int index; } mets[] = {
+            {"GPU utilization", 100}, {"GPU temperature", 101}, {"VRAM", 102},
+            {"CPU temperature", 103}, {"CPU frequency", 104}, {"CPU utilization", 105},
+            {"Memory", 106}, {"Disk (fullest)", 107}, {"Network rates", 108},
+            {"Battery", 109}, {"Ping (1.1.1.1)", 110},
+        };
+        for (int i = 0; i < (int)(sizeof(mets) / sizeof(mets[0])); i++) {
+            int bit = 1 << (mets[i].index - 100);
+            gtk_box_append(GTK_BOX(isl),
+                           setting_row(section(mets[i].label, "Show on the island pill."),
+                                       make_switch(app, mets[i].index,
+                                                   (app->config.island_metrics & bit) ? 1 : 0)));
+        }
+        gtk_box_append(GTK_BOX(content), isl);
     }
 
     GtkWidget *graphics = gtk_box_new(GTK_ORIENTATION_VERTICAL, 12);

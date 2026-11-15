@@ -34,6 +34,13 @@ typedef struct {
     int window_width;
     int window_height;
     int current_page;
+    int island_enabled;
+    int island_dock;   /* 0=float, 1=top, 2=right, 3=bottom, 4=left */
+    int island_metrics; /* bitmask of metrics shown */
+    double island_cycle_s;
+    int island_x;
+    int island_y;
+    int island_expanded;
     char alert_hook[256];
     int tray_enabled;
     int start_minimized;

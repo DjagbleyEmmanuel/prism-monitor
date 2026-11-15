@@ -681,6 +681,7 @@ void page_recorder_capture(App *app) {
     if (page == NULL || !page->recording || page->file == NULL) {
         return;
     }
+    app_island_activity_set(app, "recorder", (double)page->samples);
     const Snapshot *snap = app->view;
     double gpu = 0;
     if (snap->gpu_count > 0) {

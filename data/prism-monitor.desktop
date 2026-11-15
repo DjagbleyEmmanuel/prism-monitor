@@ -11,12 +11,17 @@ Categories=System;Monitor;
 Keywords=system;monitor;cpu;memory;gpu;storage;network;process;processes;sensor;sensors;battery;performance;
 StartupNotify=true
 StartupWMClass=prism-monitor
-Actions=Open;Pause;ExportSnapshot;ExportPNG;Diagnostics;Tray;Quit;
+Actions=Open;Island;Pause;ExportSnapshot;ExportPNG;Diagnostics;Tray;Quit;
 
 [Desktop Action Open]
 Name=Open Prism Monitor
 Exec=prism-monitor
 Icon=io.prism.Monitor
+
+[Desktop Action Island]
+Name=Toggle Prism Island
+Exec=prism-monitor
+Icon=application-x-addon
 
 [Desktop Action Pause]
 Name=Pause / Resume Sampling

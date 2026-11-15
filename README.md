@@ -4,7 +4,7 @@ Fast, native system monitor for Linux — live CPU, memory, GPU, storage,
 network, process, sensor and power telemetry with custom Cairo charts on
 GTK 4.
 
-![Version](https://img.shields.io/badge/version-1.3.2-blue)
+![Version](https://img.shields.io/badge/version-1.4.0-blue)
 ![GTK](https://img.shields.io/badge/GTK-4-green)
 ![License](https://img.shields.io/badge/license-MIT-lightgrey)
 
@@ -42,6 +42,22 @@ Plus:
 - Alert hooks (env `PRISM_ALERT_MSG`) + `alerts.log`
 - Diagnostics bundle (`--diagnostics`, palette), Prometheus exporter (`--exporter PORT`)
 - Flatpak manifest, gettext skeleton (`po/`, `make i18n`), CI with ASan
+
+### New in 1.4.0
+
+- **Prism Island** — floating Dynamic Island pill (native GTK4, not islandcn:
+  islandcn is a React/shadcn package and cannot be embedded in a C GTK4 app).
+  GPU utilization, GPU temperature, VRAM, CPU temperature, CPU frequency/usage,
+  memory, fullest disk, network rates, battery and ping.
+- Drag the pill anywhere, or dock to any screen edge (top/right/bottom/left)
+  where it retracts to a slim accent sliver — hover to pop it back out.
+- Cycle speed configurable; click body to cycle metrics, chevron to expand a
+  live panel with sparkline and Pause / Recorder / Settings buttons.
+- Shows live activity overrides: flight recorder (REC + sample count),
+  benchmarks (BENCH), threshold alerts (ALERT).
+- Choose exactly which metrics appear (Settings → Island), plus dock side and
+  cycle seconds; toggled from Settings, tray menu, header menu and launcher
+  right-click action; enabled automatically with tray mode.
 
 ### New in 1.2.0
 

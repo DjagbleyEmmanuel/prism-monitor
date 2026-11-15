@@ -8,6 +8,9 @@ BIN := bin
 PKGS := gtk4
 PKG_CFLAGS := $(shell $(PKG_CONFIG) --cflags $(PKGS))
 PKG_LIBS := $(shell $(PKG_CONFIG) --libs $(PKGS))
+ifneq ($(findstring x11,$(shell $(PKG_CONFIG) --libs gtk4)),x11)
+PKG_LIBS += -lX11
+endif
 
 CFLAGS ?= -O2 -g
 CFLAGS += -std=c11 -D_GNU_SOURCE -Wall -Wextra -Wno-unused-parameter -Isrc $(PKG_CFLAGS)

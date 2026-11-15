@@ -487,6 +487,8 @@ static void bench_finished(GObject *source, GAsyncResult *result, gpointer data)
     }
     g_free(out);
     page->running = 0;
+    /* keep a short activity pulse so the island shows the result briefly */
+    app_island_activity_set(page->app, "bench", 1.0);
     bench_row_refresh(page, 1);
     if (page->selected >= 0) {
         bench_detail(page, page->selected);
@@ -497,6 +499,7 @@ static void bench_finished(GObject *source, GAsyncResult *result, gpointer data)
 static void bench_start_kind(BenchPage *page, int kind) {
     page->running = 1;
     page->current_kind = kind;
+    app_island_activity_set(page->app, "bench", 0.5);
     bench_row_refresh(page, 1);
     if (page->selected >= 0) {
         bench_detail(page, page->selected);

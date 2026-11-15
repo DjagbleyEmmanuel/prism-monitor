@@ -18,9 +18,10 @@ static const char *menu_labels[] = {
     "Export Chart PNG",
     "Diagnostics Bundle",
     "Settings",
+    "Toggle Island",
     "Exit Prism Monitor",
 };
-static const int menu_count = 7;
+static const int menu_count = 8;
 
 static void tray_activate_action(int id) {
     {
@@ -61,6 +62,9 @@ static void tray_activate_action(int id) {
             tray_present(g_app);
             break;
         case 7:
+            app_island_toggle(g_app);
+            break;
+        case 8:
             g_application_quit(G_APPLICATION(g_app->application));
             break;
         default:

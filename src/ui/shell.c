@@ -7,7 +7,9 @@
 #include "ui/draw.h"
 #include "ui/icons.h"
 #include "ui/pages.h"
+#include "ui/pages.h"
 #include "ui/tray.h"
+#include "ui/island.h"
 #include "ui/theme.h"
 #include "ui/widgets.h"
 
@@ -764,6 +766,7 @@ void app_check_alerts(App *app) {
                              app->config.alert_battery_pct,
                              g_get_monotonic_time(), 60 * G_USEC_PER_SEC);
     if (fired != 0) {
+        app_island_activity_set(app, "alert", 1.0);
         char msg[256];
         if (fired & ALERT_TEMP) {
             double t = app->view->cpu.temp_c;
@@ -1262,6 +1265,7 @@ static gboolean app_poll(gpointer data) {
         }
         app_update_header(app);
         app_refresh(app);
+        island_tick(app);
         if (app->config.animations) {
             app->anim_until = g_get_monotonic_time() + 600000;
         }
@@ -1427,6 +1431,13 @@ static void action_export(GSimpleAction *action, GVariant *parameter,
     app_export_snapshot(data);
 }
 
+static void action_island(GSimpleAction *action, GVariant *parameter,
+                          gpointer data) {
+    (void)action;
+    (void)parameter;
+    app_island_toggle(data);
+}
+
 static void action_palette(GSimpleAction *action, GVariant *parameter,
                            gpointer data) {
     (void)action;
@@ -1461,6 +1472,7 @@ static const GActionEntry app_actions[] = {
     {"pause", action_pause, NULL, NULL, NULL},
     {"export-snapshot", action_export, NULL, NULL, NULL},
     {"palette", action_palette, NULL, NULL, NULL},
+    {"island-toggle", action_island, NULL, NULL, NULL},
     {"export-png", action_png, NULL, NULL, NULL},
     {"diagnostics", action_diag, NULL, NULL, NULL},
     {"tray", action_tray, NULL, NULL, NULL},
@@ -1616,6 +1628,7 @@ static GtkWidget *build_header(App *app, GtkWindow *window) {
         {"Export Chart PNG", "app.export-png", "image-x-generic"},
         {"Diagnostics Bundle", "app.diagnostics", "dialog-information"},
         {"Minimize to Tray", "app.tray", "application-x-executable"},
+        {"Toggle Island", "app.island-toggle", "application-x-addon"},
         {"Settings", "app.settings", "preferences-system"},
         {"Appearance", "app.appearance", "preferences-desktop"},
         {"Keyboard Shortcuts", "app.shortcuts", "input-keyboard"},
@@ -1804,7 +1817,14 @@ App *app_create(GtkApplication *application) {
     }
     if (app->config.tray_enabled) {
         tray_init(app);
+        if (!app->config.island_enabled) {
+            app->config.island_enabled = 1;
+            app_save_config(app);
+        }
         app_notify(app, "Tray icon active — right-click it for menu");
+    }
+    if (app->config.island_enabled) {
+        island_create(app);
     }
     if (app->config.start_minimized || startup_minimized) {
         if (app->config.tray_enabled && tray_is_active()) {
@@ -1815,6 +1835,9 @@ App *app_create(GtkApplication *application) {
     } else {
         gtk_window_present(GTK_WINDOW(window));
     }
+    if (app->island != NULL) {
+        island_raise(app);
+    }
     return app;
 }
 
@@ -1823,6 +1846,7 @@ void app_destroy(App *app) {
         return;
     }
     tray_shutdown(app);
+    island_destroy(app);
     if (app->poll_source != 0) {
         g_source_remove(app->poll_source);
     }

@@ -65,6 +65,10 @@ struct App {
     GtkWidget *palette_window;
     AlertState alerts;
     gboolean paused;
+    void *island;
+    char island_activity[40];
+    double island_activity_progress;
+    gint64 island_activity_until;
 
     Sampler *sampler;
     Snapshot *view;
@@ -128,6 +132,10 @@ void app_export_diagnostics(App *app);
 void app_set_autostart(App *app, gboolean enabled);
 void app_tray_minimize(App *app);
 void app_open_palette(App *app);
+void app_island_toggle(App *app);
+void app_island_set_visible(App *app, gboolean visible);
+void app_island_activity_set(App *app, const char *what, double progress);
+void app_island_refresh_config(App *app);
 void app_check_alerts(App *app);
 int app_page_from_name(const char *name);
 
