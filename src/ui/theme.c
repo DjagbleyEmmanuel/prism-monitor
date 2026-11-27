@@ -286,6 +286,9 @@ char *theme_build_css(const Theme *t, bool compact, const char *font_family,
     char *safe_font = g_strescape(font, NULL);
     g_string_append(css, "* { outline: none; }\n");
     g_string_append_printf(css, "window, .background { background-color: %s; color: %s; }\n", bg, text);
+g_string_append(css, "window.island, window.island.background, "
+    ".island-area { background-color: transparent; background-image: none; "
+    "box-shadow: none; }\n");
     g_string_append_printf(css, "window { font-family: '%s', 'Noto Sans', sans-serif; }\n", safe_font);
     g_string_append_printf(css,
         "label, button, entry, spinbutton, dropdown, popover, .statusbar { font-size: %.1fpx; }\n",

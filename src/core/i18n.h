@@ -11,9 +11,13 @@
 #define _(String) String
 #endif
 
+#ifdef ENABLE_NLS
 #define prism_i18n_init() do { \
     bindtextdomain("prism-monitor", "/usr/share/locale"); \
     textdomain("prism-monitor"); \
 } while (0)
+#else
+#define prism_i18n_init() do { } while (0)
+#endif
 
 #endif

@@ -193,12 +193,14 @@ static void switch_changed(GtkSwitch *sw, GParamSpec *pspec, gpointer data) {
             app->config.island_enabled = active;
             if (active) {
                 if (app->island == NULL) {
-                    app_island_refresh_config(app);
+                    island_create(app);
+                } else {
+                    island_show(app, TRUE);
                 }
-                island_create(app);
             } else if (app->island != NULL) {
                 island_show(app, FALSE);
             }
+            app_save_config(app);
             break;
         default:
             if (which >= 100 && which < 200) {
@@ -417,7 +419,6 @@ static void island_dock_changed(GObject *object, GParamSpec *pspec, gpointer dat
     App *app = data;
     app->config.island_dock = (int)gtk_drop_down_get_selected(GTK_DROP_DOWN(object));
     if (app->island == NULL && app->config.island_enabled) {
-        app_island_refresh_config(app);
         island_create(app);
     } else {
         app_island_refresh_config(app);

@@ -11,6 +11,7 @@ PKG_LIBS := $(shell $(PKG_CONFIG) --libs $(PKGS))
 ifneq ($(findstring x11,$(shell $(PKG_CONFIG) --libs gtk4)),x11)
 PKG_LIBS += -lX11
 endif
+PKG_LIBS += -lXext
 
 CFLAGS ?= -O2 -g
 CFLAGS += -std=c11 -D_GNU_SOURCE -Wall -Wextra -Wno-unused-parameter -Isrc $(PKG_CFLAGS)
@@ -59,6 +60,9 @@ debug:
 
 test: $(BUILD)/tests/test_core
 	./$(BUILD)/tests/test_core
+
+test-ui: $(BIN)/$(APP)
+	xvfb-run -a -s "-screen 0 1280x800x24" bash tests/test_island_ui.sh
 
 $(BUILD)/tests/test_core: tests/test_core.c src/core/parse.c src/core/format.c src/core/history.c src/core/alerts.c src/core/export.c src/core/plugins.c src/sys/proc.c src/sys/disk.c src/sys/net.c src/core/common.c
 	@mkdir -p $(dir $@)

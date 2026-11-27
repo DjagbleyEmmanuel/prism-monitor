@@ -26,6 +26,15 @@
   </developer>
   <content_rating type="oars-1.1"/>
   <releases>
+    <release version="1.4.1" date="2026-11-27">
+      <description>
+        <p>Prism Island fixes and polish: transparent window and proper rounded
+          corners, stable drag with no shake, reliable metric cycling, animated
+          expand/collapse, adaptive panel height, monitor/workarea-aware docking
+          with nearest-edge snapping, hover affordances and a headless UI
+          regression test.</p>
+      </description>
+    </release>
     <release version="1.4.0" date="2026-11-15">
       <description>
         <p>Prism Island — a floating Dynamic Island pill (GPU, VRAM, CPU/GPU temps,

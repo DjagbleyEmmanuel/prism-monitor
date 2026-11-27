@@ -4,7 +4,7 @@ Fast, native system monitor for Linux — live CPU, memory, GPU, storage,
 network, process, sensor and power telemetry with custom Cairo charts on
 GTK 4.
 
-![Version](https://img.shields.io/badge/version-1.4.0-blue)
+![Version](https://img.shields.io/badge/version-1.4.1-blue)
 ![GTK](https://img.shields.io/badge/GTK-4-green)
 ![License](https://img.shields.io/badge/license-MIT-lightgrey)
 
@@ -42,6 +42,16 @@ Plus:
 - Alert hooks (env `PRISM_ALERT_MSG`) + `alerts.log`
 - Diagnostics bundle (`--diagnostics`, palette), Prometheus exporter (`--exporter PORT`)
 - Flatpak manifest, gettext skeleton (`po/`, `make i18n`), CI with ASan
+
+### New in 1.4.1
+
+- Island reliability: true transparent window, correct capsule/panel corners,
+  stable pointer-based dragging (no shake), reliable click-to-cycle,
+  adaptive expanded height, and hover-reveal that doesn't flicker.
+- Animated 180ms expand/collapse; monitor- and workarea-aware placement;
+  nearest-edge snapping when docking; pointer cursor, tooltip and a pulsing
+  docked sliver for discoverability.
+- Headless Xvfb UI regression test (`make test-ui`) covering every interaction.
 
 ### New in 1.4.0
 

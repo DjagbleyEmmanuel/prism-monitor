@@ -9,7 +9,7 @@
 
 #define PRISM_APP_ID "io.prism.Monitor"
 #define PRISM_APP_NAME "Prism Monitor"
-#define PRISM_VERSION "1.4.0"
+#define PRISM_VERSION "1.4.1"
 #define PRISM_MAINTAINER "Priderock-Elohimmanuel"
 #define PRISM_ARRAY_LEN(a) (sizeof(a) / sizeof((a)[0]))
 

@@ -153,7 +153,7 @@ static int run_daemon(double interval) {
     char *dir = g_build_filename(g_get_user_data_dir(), "prism-monitor", NULL);
     g_mkdir_with_parents(dir, 0700);
     char *logpath = g_build_filename(dir, "daemon.log", NULL);
-    FILE *log = freopen(logpath, "a", "w");
+    FILE *log = freopen(logpath, "a", stdout);
     (void)log;
     char *pidpath = g_build_filename(dir, "daemon.pid", NULL);
     FILE *pf = fopen(pidpath, "w");
@@ -480,8 +480,12 @@ int main(int argc, char **argv) {
     app_configure_startup_full(opt_page, opt_interval, opt_paused,
                                opt_minimized, opt_tray);
 
-    GtkApplication *application = gtk_application_new(PRISM_APP_ID,
-                                                      G_APPLICATION_DEFAULT_FLAGS);
+    /* Optional ID override lets headless tests run an isolated instance
+     * without colliding with a desktop session already owning PRISM_APP_ID. */
+    const char *app_id = g_getenv("PRISM_APP_ID_OVERRIDE");
+    GtkApplication *application = gtk_application_new(
+        app_id != NULL && app_id[0] != '\0' ? app_id : PRISM_APP_ID,
+        G_APPLICATION_DEFAULT_FLAGS);
     g_signal_connect(application, "activate", G_CALLBACK(prism_activate), NULL);
     g_signal_connect(application, "shutdown", G_CALLBACK(prism_shutdown), NULL);
     int status = g_application_run(G_APPLICATION(application), gui_argc, gui_argv);

@@ -1,4 +1,5 @@
 #include "core/common.h"
+#include "sys/systeminfo.h"
 #include "ui/app.h"
 #include "ui/manage.h"
 #include "ui/pages.h"
